@@ -1,0 +1,89 @@
+"""Frame extraction and manifest building for How2Sign val set."""
+
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+
+def extract_frames(
+    video_path: Path,
+    out_dir: Path,
+    n_frames: int = 8,
+) -> list[Path]:
+    """Extract `n_frames` evenly-spaced frames from `video_path` as JPEGs.
+
+    Returns list of output JPEG paths (sorted by index).
+    Raises ValueError if the video cannot be opened or has no frames.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total <= 0:
+        cap.release()
+        raise ValueError(f"Video has no readable frames: {video_path}")
+
+    indices = np.linspace(0, total - 1, n_frames, dtype=int)
+    paths: list[Path] = []
+    for seq_idx, frame_idx in enumerate(indices):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
+        ret, frame = cap.read()
+        if not ret:
+            frame = np.zeros((224, 224, 3), dtype=np.uint8)
+        out_path = out_dir / f"frame_{seq_idx:02d}.jpg"
+        cv2.imwrite(str(out_path), frame)
+        paths.append(out_path)
+    cap.release()
+    return paths
+
+
+def build_manifest(
+    tsv_path: Path,
+    videos_dir: Path,
+    out_dir: Path,
+    n_frames: int = 8,
+) -> Path:
+    """Extract frames for every clip in the TSV and write manifest.jsonl.
+
+    Skips rows whose MP4 is not present in `videos_dir`.
+    Returns the path to manifest.jsonl.
+    """
+    frames_root = out_dir / "frames"
+    manifest_path = out_dir / "manifest.jsonl"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(tsv_path, newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        rows = list(reader)
+
+    skipped = 0
+    with open(manifest_path, "w") as mf:
+        for row in rows:
+            clip_name = row["SENTENCE_NAME"].strip()
+            sentence = row["SENTENCE"].strip()
+            mp4_path = videos_dir / f"{clip_name}.mp4"
+            if not mp4_path.exists():
+                skipped += 1
+                continue
+            clip_out_dir = frames_root / clip_name
+            try:
+                frame_paths = extract_frames(mp4_path, clip_out_dir, n_frames)
+            except ValueError as e:
+                print(f"[WARN] Skipping {clip_name}: {e}")
+                skipped += 1
+                continue
+            record = {
+                "clip_name": clip_name,
+                "sentence": sentence,
+                "frame_paths": [str(p) for p in frame_paths],
+            }
+            mf.write(json.dumps(record) + "\n")
+
+    print(f"Manifest written to {manifest_path} (skipped={skipped})")
+    return manifest_path
