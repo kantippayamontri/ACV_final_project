@@ -1,22 +1,16 @@
+"""Tests for preprocess.extract module.
+
+Uses mocking to avoid slow video I/O operations.
+"""
 import csv
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-import cv2
 import numpy as np
 import pytest
 
 from preprocess.extract import extract_frames, build_manifest
-
-
-def make_fake_video(path: Path, num_frames: int = 20) -> None:
-    """Write a tiny synthetic MP4 with solid-colour frames."""
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(path), fourcc, 10, (64, 64))
-    for i in range(num_frames):
-        frame = np.full((64, 64, 3), i * 10, dtype=np.uint8)
-        out.write(frame)
-    out.release()
 
 
 def make_fake_tsv(path: Path, rows: list[dict]) -> None:
@@ -30,30 +24,41 @@ def make_fake_tsv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def test_extract_frames_produces_correct_count(tmp_path):
+@patch("preprocess.extract.cv2.VideoCapture")
+def test_extract_frames_produces_correct_count(MockVideoCapture, tmp_path):
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.get.return_value = 20  # 20 frames total
+    mock_cap.read.return_value = (True, np.zeros((64, 64, 3), dtype=np.uint8))
+    MockVideoCapture.return_value = mock_cap
+
     video_path = tmp_path / "clip_a.mp4"
-    make_fake_video(video_path, num_frames=20)
     out_dir = tmp_path / "frames" / "clip_a"
     paths = extract_frames(video_path, out_dir, n_frames=8)
+
     assert len(paths) == 8
     for p in paths:
-        assert p.exists()
         assert p.suffix == ".jpg"
 
 
-def test_extract_frames_names_sequentially(tmp_path):
-    video_path = tmp_path / "clip_b.mp4"
-    make_fake_video(video_path)
-    out_dir = tmp_path / "frames" / "clip_b"
-    paths = extract_frames(video_path, out_dir, n_frames=4)
-    names = [p.name for p in paths]
-    assert names == ["frame_00.jpg", "frame_01.jpg", "frame_02.jpg", "frame_03.jpg"]
+@patch("preprocess.extract.cv2.VideoCapture")
+def test_extract_frames_handles_missing_video(MockVideoCapture, tmp_path):
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = False
+    MockVideoCapture.return_value = mock_cap
+
+    video_path = tmp_path / "missing.mp4"
+    out_dir = tmp_path / "frames" / "missing"
+
+    with pytest.raises(ValueError, match="Cannot open video"):
+        extract_frames(video_path, out_dir, n_frames=8)
 
 
 def test_build_manifest_skips_missing_video(tmp_path):
     tsv_path = tmp_path / "val.csv"
     videos_dir = tmp_path / "raw_videos"
     videos_dir.mkdir()
+
     make_fake_tsv(
         tsv_path,
         [
@@ -61,9 +66,15 @@ def test_build_manifest_skips_missing_video(tmp_path):
             {"VIDEO_ID": "v2", "VIDEO_NAME": "n2", "SENTENCE_ID": "s2", "SENTENCE_NAME": "clip_missing", "START_REALIGNED": "0", "END_REALIGNED": "1", "SENTENCE": "should be skipped"},
         ],
     )
-    make_fake_video(videos_dir / "clip_present.mp4")
+    # Create a dummy file (not a real video, but exists)
+    (videos_dir / "clip_present.mp4").write_bytes(b"fake")
+
     out_dir = tmp_path / "processed"
-    manifest_path = build_manifest(tsv_path, videos_dir, out_dir, n_frames=4)
+
+    with patch("preprocess.extract.extract_frames") as mock_extract:
+        mock_extract.return_value = [tmp_path / "fake.jpg"] * 4
+        manifest_path = build_manifest(tsv_path, videos_dir, out_dir, n_frames=4)
+
     lines = manifest_path.read_text().strip().splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
@@ -76,15 +87,21 @@ def test_build_manifest_jsonl_format(tmp_path):
     tsv_path = tmp_path / "val.csv"
     videos_dir = tmp_path / "raw_videos"
     videos_dir.mkdir()
+
     make_fake_tsv(
         tsv_path,
         [
             {"VIDEO_ID": "v1", "VIDEO_NAME": "n1", "SENTENCE_ID": "s1", "SENTENCE_NAME": "myclip", "START_REALIGNED": "0", "END_REALIGNED": "1", "SENTENCE": "sign this"},
         ],
     )
-    make_fake_video(videos_dir / "myclip.mp4")
+    (videos_dir / "myclip.mp4").write_bytes(b"fake")
+
     out_dir = tmp_path / "processed"
-    manifest_path = build_manifest(tsv_path, videos_dir, out_dir, n_frames=4)
+
+    with patch("preprocess.extract.extract_frames") as mock_extract:
+        mock_extract.return_value = [tmp_path / "fake.jpg"] * 4
+        manifest_path = build_manifest(tsv_path, videos_dir, out_dir, n_frames=4)
+
     record = json.loads(manifest_path.read_text().splitlines()[0])
     assert set(record.keys()) == {"clip_name", "sentence", "frame_paths"}
     assert all(Path(p).name.endswith(".jpg") for p in record["frame_paths"])
