@@ -1,0 +1,10 @@
+technique
+1. Supervised Fine-Tuning (SFT): Training the model on labeled input-output pairs (your data) to adapt its behavior.
+2. LoRA (Low-Rank Adaptation): Parameter-efficient fine-tuning by injecting small trainable adapters into specific layers.
+3. QLoRA: Combines LoRA with quantized (e.g., 4-bit) models for even more efficient fine-tuning.
+4. PEFT (Parameter-Efficient Fine-Tuning): General term for methods like LoRA, Prefix Tuning, and Adapters that only update a small subset of parameters.
+5. RLHF (Reinforcement Learning from Human Feedback): Uses human preference data to further align the model’s outputs.
+6. DPO (Direct Preference Optimization): Fine-tunes the model directly on preference data without reward modeling.
+7. SFT + RLHF: A two-stage process—first supervised fine-tuning, then RLHF.
+8. Adapter Tuning: Adds small adapter modules to the model and only trains those.
+9. Prompt Tuning / Prefix Tuning: Only optimizes special prompt or prefix tokens, not the model weights.

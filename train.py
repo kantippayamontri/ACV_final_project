@@ -51,34 +51,41 @@ def train(
 ) -> None:
     """Fine-tune Qwen2.5-VL-2B-Instruct on ASL frames with QLoRA."""
     import torch
-    from unsloth import FastVisionModel
-    from unsloth.trainer import UnslothVisionDataCollator
-    from trl import SFTTrainer, SFTConfig
+    from unsloth import FastVisionModel # allow to load and fine-tune VLLM using unsloth utilities
+    from unsloth.trainer import UnslothVisionDataCollator # use to prepare batches of VLLM data (image, text) for training, handling the format and batching required by the model during fine-tuning
+    from trl import SFTTrainer, SFTConfig # SFTTrainer = class for supervised fine-tuning (SFT), SFTConfig = use to config training parameters like batch size, steps, optimizers
 
     # 1. Load model
     model, tokenizer = FastVisionModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True,
+        load_in_4bit=True, # load model weight in 4-bit precision(quantized) -> required for QLoRA(Quantized Low-Rank Adapter) training
     )
+    # 4-bit: Uses the least memory (about 4× smaller than 16-bit), fastest, but may lose some accuracy. Enables training very large models on consumer GPUs. Used for QLoRA.
+    # 8-bit: Uses more memory than 4-bit but less than 16-bit. Good balance between efficiency and accuracy, with minimal quality loss.
+    # 16-bit (fp16/bf16): Standard for most training, highest accuracy, but uses the most memory and compute. Needed for full-precision tasks.
+    # In summary: Lower bits = less memory, faster, but potentially less accurate. 4-bit is most efficient, 16-bit is most precise.
 
     # 2. Add LoRA adapters
-    model = FastVisionModel.get_peft_model(
+    model = FastVisionModel.get_peft_model( # parameter-efficient fine-tuning(PEFT)
         model,
-        finetune_vision_layers=True,
-        finetune_language_layers=True,
-        finetune_attention_modules=True,
-        finetune_mlp_modules=True,
-        r=16,
+        finetune_vision_layers=True, # enable LoRA adapters on vision encoder layers -> use for process images/frames -> learn ASL vision features
+        finetune_language_layers=True, # enable LoRA adapters on language encoder layers -> use for process generate text -> learn ASL translations
+        finetune_attention_modules=True, # enable LoRA adapters on attention module -> Q,K,V projections -> learn new attention pattern for ASL
+        finetune_mlp_modules=True, # enable LoRA adapters on MLP(feed-forward) modules -> learn new transformations for ASL data.
+        r=16, #
         lora_alpha=16,
         lora_dropout=0,
         bias="none",
-        random_state=3407,
+        random_state=3407, # random seed for reproducible
         use_rslora=False,
-        target_modules="all-linear",
+        target_modules="all-linear", # Apply LoRA adapters to all linear layers in the model, not just specific ones. Maximizes what the adapters can learn.
     )
 
     FastVisionModel.for_training(model)
+    # 1) Enables gradient checkpointing — saves memory by recomputing activations during the backward pass instead of storing them.
+    # 2) Sets the model to train mode — activates dropout, batch norm updates, etc.
+    # 3) Ensures LoRA adapters are trainable — makes sure only the LoRA parameters have gradients enabled, while the frozen base model weights stay untrainable.
 
     # 3. Load dataset
     dataset = load_training_dataset(manifest_path)

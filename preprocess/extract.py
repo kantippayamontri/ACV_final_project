@@ -44,10 +44,10 @@ def extract_frames(
 
 
 def build_manifest(
-    tsv_path: Path,
-    videos_dir: Path,
+    tsv_path: Path, # csv file that contain each clips information
+    videos_dir: Path, # clips path
     out_dir: Path,
-    n_frames: int = 8,
+    n_frames: int = 8, #number of frame per video
 ) -> Path:
     """Extract frames for every clip in the TSV and write manifest.jsonl.
 
@@ -62,13 +62,25 @@ def build_manifest(
         reader = csv.DictReader(f, delimiter="\t")
         rows = list(reader)
 
+    # Load already-processed clip names so we can resume interrupted runs.
+    done: set[str] = set()
+    if manifest_path.exists():
+        with open(manifest_path) as _f:
+            for line in _f:
+                line = line.strip()
+                if line:
+                    done.add(json.loads(line)["clip_name"])
+
     skipped = 0
-    with open(manifest_path, "w") as mf:
+    written = 0
+    with open(manifest_path, "a") as mf:
         for row in rows:
             clip_name = row["SENTENCE_NAME"].strip()
+            if clip_name in done: #already process
+                continue
             sentence = row["SENTENCE"].strip()
             mp4_path = videos_dir / f"{clip_name}.mp4"
-            if not mp4_path.exists():
+            if not mp4_path.exists(): # check for video exist for extracting frames or not
                 skipped += 1
                 continue
             clip_out_dir = frames_root / clip_name
@@ -84,6 +96,7 @@ def build_manifest(
                 "frame_paths": [str(p) for p in frame_paths],
             }
             mf.write(json.dumps(record) + "\n")
+            written += 1
 
-    print(f"Manifest written to {manifest_path} (skipped={skipped})")
+    print(f"Manifest updated: {manifest_path} (new={written}, skipped={skipped}, already_done={len(done)})")
     return manifest_path

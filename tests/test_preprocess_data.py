@@ -1,3 +1,9 @@
+# To run preprocessing directly:
+#   python preprocess_data.py --tsv <path/to/val.csv> --videos <path/to/videos/> --out <output/dir> --n-frames 8
+#
+# Example with How2Sign defaults (no arguments needed):
+#   python preprocess_data.py
+
 import importlib
 import sys
 from pathlib import Path

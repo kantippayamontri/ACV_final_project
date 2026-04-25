@@ -1,3 +1,9 @@
+# To run preprocessing directly:
+#   python preprocess_data.py --tsv <path/to/val.csv> --videos <path/to/videos/> --out <output/dir> --n-frames 8
+#
+# Example with How2Sign defaults (no arguments needed):
+#   python preprocess_data.py
+
 """Standalone preprocessing script: extract frames and build manifest.jsonl."""
 from __future__ import annotations
 

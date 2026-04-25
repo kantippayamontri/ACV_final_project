@@ -47,7 +47,7 @@ def test_load_training_dataset_sample_has_messages(tmp_path):
     assert sample["messages"][1]["content"] == "hello world"
 
 
-def test_load_training_dataset_images_are_pil(tmp_path):
+def test_load_training_dataset_images_are_paths(tmp_path):
     n_frames = 4
     d = make_frames(tmp_path, "clip_000", n=n_frames)
     manifest = tmp_path / "manifest.jsonl"
@@ -60,4 +60,5 @@ def test_load_training_dataset_images_are_pil(tmp_path):
     image_entries = [c for c in user_content if c["type"] == "image"]
     assert len(image_entries) == n_frames
     for entry in image_entries:
-        assert isinstance(entry["image"], PILImage.Image), f"Expected PIL Image, got {type(entry['image'])}"
+        assert isinstance(entry["image"], str), f"Expected string path, got {type(entry['image'])}"
+        assert Path(entry["image"]).suffix == ".jpg"
