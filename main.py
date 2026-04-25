@@ -1,18 +1,10 @@
+"""ASL fine-tuning pipeline — thin wrapper over preprocess_data.py and train.py."""
+from __future__ import annotations
+
 import argparse
-from pathlib import Path
 
-
-def run_preprocess(n_frames: int = 8) -> None:
-    from preprocess.extract import build_manifest
-    tsv = Path("datasets/raw/val_rgb_front_clips/how2sign_realigned_val.csv")
-    videos = Path("datasets/raw/val_rgb_front_clips/raw_videos")
-    out = Path("datasets/processed")
-    build_manifest(tsv, videos, out, n_frames=n_frames)
-
-
-def run_train(max_steps: int = 60) -> None:
-    from train import train
-    train(max_steps=max_steps)
+import preprocess_data
+import train as train_module
 
 
 def main() -> None:
@@ -28,9 +20,15 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.preprocess:
-        run_preprocess(n_frames=args.n_frames)
+        from preprocess.extract import build_manifest
+        build_manifest(
+            preprocess_data.DEFAULT_TSV,
+            preprocess_data.DEFAULT_VIDEOS,
+            preprocess_data.DEFAULT_OUT,
+            n_frames=args.n_frames,
+        )
     elif args.train:
-        run_train(max_steps=args.max_steps)
+        train_module.train(max_steps=args.max_steps)
     else:
         print("No action specified. Use --preprocess or --train.")
 
