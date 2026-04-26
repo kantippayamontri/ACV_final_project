@@ -1,12 +1,14 @@
 # Usage:
-#   python train.py --max-steps 300                          ← final project (recommended)
-#   python train.py --max-steps 60 --output-dir my_output/   ← quick test
+#   python train.py --epochs 2                                ← full run (auto-computes steps from manifest)
+#   python train.py --epochs 2 --val-manifest val.jsonl       ← with early stopping
+#   python train.py --max-steps 300 --output-dir my_output/   ← quick test (overrides epoch calculation)
 
 """ASL fine-tuning pipeline using Unsloth FastVisionModel + QLoRA."""
 
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +37,16 @@ def _record_to_sample(record: dict) -> dict:
     }
 
 
+def _count_manifest_samples(manifest_path: Path | str) -> int:
+    """Count non-empty lines in a manifest JSONL file (one sample per line)."""
+    count = 0
+    with open(manifest_path) as f:
+        for line in f:
+            if line.strip():
+                count += 1
+    return count
+
+
 def load_training_dataset(manifest_path: Path | str = MANIFEST_PATH) -> list[dict]:
     """Load manifest.jsonl and return a list of ChatML samples with PIL Images.
 
@@ -53,10 +65,15 @@ def load_training_dataset(manifest_path: Path | str = MANIFEST_PATH) -> list[dic
 def train(
     manifest_path: Path | str = MANIFEST_PATH,
     val_manifest_path: Path | str | None = None,
-    max_steps: int = 15000,
+    num_epochs: int = 2,
+    max_steps: int | None = None,
     output_dir: str = OUTPUT_DIR,
 ) -> None:
-    """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA."""
+    """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA.
+
+    max_steps is auto-computed from num_epochs and the manifest size when not
+    explicitly provided.  Pass max_steps to override (e.g. for a quick test).
+    """
     import torch
     from unsloth import FastVisionModel # allow to load and fine-tune VLLM using unsloth utilities
     from unsloth.trainer import UnslothVisionDataCollator # use to prepare batches of VLLM data (image, text) for training, handling the format and batching required by the model during fine-tuning
@@ -105,6 +122,19 @@ def train(
     # 3. Load datasets
     train_dataset = load_training_dataset(manifest_path)
     val_dataset = load_training_dataset(val_manifest_path) if val_manifest_path else None
+
+    # Compute max_steps from epochs if not explicitly overridden.
+    # effective batch size = per_device_batch(1) × grad_accum(4) = 4
+    EFFECTIVE_BATCH = 4
+    num_samples = _count_manifest_samples(manifest_path)
+    steps_per_epoch = math.ceil(num_samples / EFFECTIVE_BATCH)
+    computed_steps = steps_per_epoch * num_epochs
+    max_steps = max_steps if max_steps is not None else computed_steps
+    print(
+        f"Training: {num_samples} samples, {num_epochs} epoch(s) "
+        f"→ {steps_per_epoch} steps/epoch = {computed_steps} computed steps "
+        f"(max_steps={max_steps})"
+    )
 
     # 4. Train
     from transformers import EarlyStoppingCallback
@@ -175,24 +205,27 @@ def cli() -> None:
                         help="Path to train manifest.jsonl")
     parser.add_argument("--val-manifest", type=Path, default=None,
                         help="Path to val manifest.jsonl (enables early stopping when provided)")
-    parser.add_argument("--max-steps", type=int, default=15000,
-                        help="Hard cap on training steps (default: 15000 ≈ 2 epochs at 30k samples)")
+    parser.add_argument("--epochs", type=int, default=2,
+                        help="Number of training epochs (default: 2); steps are auto-computed from manifest size")
+    parser.add_argument("--max-steps", type=int, default=None,
+                        help="Override computed steps (e.g. 300 for a quick test); takes precedence over --epochs")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Output directory for LoRA adapters (auto-generated when omitted)")
     args = parser.parse_args()
-    output_dir = args.output_dir or _make_run_dir(args.max_steps)
+    output_dir = args.output_dir or _make_run_dir(args.epochs, args.max_steps)
     train(
         manifest_path=args.manifest_path,
         val_manifest_path=args.val_manifest,
+        num_epochs=args.epochs,
         max_steps=args.max_steps,
         output_dir=output_dir,
     )
 
 
-def _make_run_dir(max_steps: int) -> str:
+def _make_run_dir(num_epochs: int, max_steps: int | None) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    name = f"runs/run_{ts}_steps{max_steps}"
-    return name
+    suffix = f"steps{max_steps}" if max_steps is not None else f"ep{num_epochs}"
+    return f"runs/run_{ts}_{suffix}"
 
 
 if __name__ == "__main__":
