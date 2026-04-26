@@ -52,7 +52,8 @@ def load_training_dataset(manifest_path: Path | str = MANIFEST_PATH) -> list[dic
 
 def train(
     manifest_path: Path | str = MANIFEST_PATH,
-    max_steps: int = 60,
+    val_manifest_path: Path | str | None = None,
+    max_steps: int = 15000,
     output_dir: str = OUTPUT_DIR,
 ) -> None:
     """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA."""
@@ -144,15 +145,18 @@ def cli() -> None:
         description="Fine-tune Qwen2.5-VL on ASL frames with QLoRA"
     )
     parser.add_argument("--manifest-path", type=Path, default=MANIFEST_PATH,
-                        help="Path to manifest.jsonl")
-    parser.add_argument("--max-steps", type=int, default=60,
-                        help="Training steps (default: 60)")
+                        help="Path to train manifest.jsonl")
+    parser.add_argument("--val-manifest", type=Path, default=None,
+                        help="Path to val manifest.jsonl (enables early stopping when provided)")
+    parser.add_argument("--max-steps", type=int, default=15000,
+                        help="Hard cap on training steps (default: 15000 ≈ 2 epochs at 30k samples)")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Output directory for LoRA adapters (auto-generated when omitted)")
     args = parser.parse_args()
     output_dir = args.output_dir or _make_run_dir(args.max_steps)
     train(
         manifest_path=args.manifest_path,
+        val_manifest_path=args.val_manifest,
         max_steps=args.max_steps,
         output_dir=output_dir,
     )
