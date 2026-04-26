@@ -63,15 +63,17 @@ def train(
     from trl import SFTTrainer, SFTConfig # SFTTrainer = class for supervised fine-tuning (SFT), SFTConfig = use to config training parameters like batch size, steps, optimizers
 
     # 1. Load model
+    # Pass min/max_pixels here — the image processor property has no setter in
+    # newer transformers, so post-load assignment raises AttributeError.
+    # Cap image resolution so 8 frames of 1280×720 stay within MAX_SEQ_LENGTH.
+    # Without this, 1280×720 = 1125 tokens/frame × 8 = 9000 tokens >> 4096.
     model, tokenizer = FastVisionModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
         load_in_4bit=True,
+        min_pixels=4 * 28 * 28,
+        max_pixels=MAX_PIXELS,
     )
-    # Cap image resolution so 8 frames of 1280×720 stay within MAX_SEQ_LENGTH.
-    # Without this, 1280×720 = 1125 tokens/frame × 8 = 9000 tokens >> 4096.
-    tokenizer.image_processor.max_pixels = MAX_PIXELS
-    tokenizer.image_processor.min_pixels = 4 * 28 * 28
     # 4-bit: Uses the least memory (about 4× smaller than 16-bit), fastest, but may lose some accuracy. Enables training very large models on consumer GPUs. Used for QLoRA.
     # 8-bit: Uses more memory than 4-bit but less than 16-bit. Good balance between efficiency and accuracy, with minimal quality loss.
     # 16-bit (fp16/bf16): Standard for most training, highest accuracy, but uses the most memory and compute. Needed for full-precision tasks.
