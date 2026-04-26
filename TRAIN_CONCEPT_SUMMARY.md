@@ -5,7 +5,8 @@
 1. [MAX_SEQ_LENGTH and MAX_PIXELS — the token budget problem](#1-max_seq_length-and-max_pixels--the-token-budget-problem)
 2. [Validation dataset and early stopping](#2-validation-dataset-and-early-stopping)
 3. [Epoch-based step calculation](#3-epoch-based-step-calculation)
-4. [Summary of all changes](#4-summary-of-all-changes)
+4. [Training hyperparameters](#4-training-hyperparameters)
+5. [Summary of all changes](#5-summary-of-all-changes)
 
 ---
 
@@ -306,7 +307,127 @@ When `--max-steps` is used, `--epochs` still controls the output directory name 
 
 ---
 
-## 4. Summary of all changes
+## 4. Training hyperparameters
+
+### Loss function
+
+**Cross-entropy on assistant response tokens only.**
+
+`SFTTrainer` performs Supervised Fine-Tuning (SFT). The loss is:
+
+```
+L = -∑ log P(token_t | token_1, ..., token_{t-1})
+```
+
+summed only over the **assistant turn tokens** (the ground-truth English sentence), not over the user turn (images + prompt). This is called "train on responses only" — the model is penalised only for getting the translation wrong, not for failing to predict the input frames or the prompt.
+
+`UnslothVisionDataCollator` handles the label masking: it sets labels for all non-assistant tokens to `-100`, which PyTorch's `CrossEntropyLoss` ignores. Only the translation tokens contribute to the gradient.
+
+What is NOT used:
+- No BLEU loss (BLEU is non-differentiable; it is only used at evaluation time in `inference.py`)
+- No contrastive loss
+- No RLHF / reward model — this is pure SFT
+
+---
+
+### Optimizer
+
+**`adamw_8bit`** (8-bit AdamW via `bitsandbytes`)
+
+AdamW = Adam + weight decay. Adam maintains two moving averages per parameter:
+- **m** (first moment) — exponential moving average of gradients
+- **v** (second moment) — exponential moving average of squared gradients
+
+Update rule:
+```
+m  = β1 * m + (1 - β1) * grad        # β1 = 0.9
+v  = β2 * v + (1 - β2) * grad²       # β2 = 0.999
+θ  = θ - lr * (m / (√v + ε)) - lr * λ * θ   # λ = weight_decay
+```
+
+The `_8bit` suffix means the optimizer states (m and v) are stored in 8-bit instead of 32-bit — reduces optimizer memory by ~4×. Critical on the RTX 2060 with 5.6 GB VRAM.
+
+**`weight_decay=0.01`** — the λ term above. Adds a small penalty for large weights, acting as regularisation.
+
+---
+
+### Learning rate schedule
+
+**`lr_scheduler_type="cosine"`** with **`learning_rate=2e-4`** and **`warmup_steps=5`**
+
+```
+Phase 1 (steps 0–5):    linear warmup   0     → 2e-4
+Phase 2 (steps 5–end):  cosine decay    2e-4  → ~0
+```
+
+The cosine curve decays smoothly — large updates early, tiny updates near the end. Warmup prevents large gradient updates at the start when the LoRA weights are randomly initialised.
+
+---
+
+### Batch size and gradient accumulation
+
+```
+per_device_train_batch_size = 1
+gradient_accumulation_steps = 4
+→ effective batch size       = 4
+```
+
+With batch size 1, each sample is one forward pass. Gradients are accumulated for 4 passes before a single optimizer step. This simulates batch size 4 without loading 4 samples into GPU memory simultaneously — necessary given VRAM constraints.
+
+---
+
+### Precision
+
+**`fp16=True`** on the RTX 2060 (no bfloat16 support at compute capability 7.5).
+
+| What | Precision |
+|---|---|
+| Base model weights | 4-bit (QLoRA) |
+| LoRA adapter weights | 16-bit (updated during training) |
+| Forward pass / gradients | fp16 |
+| Optimizer states (m, v) | 8-bit (via `adamw_8bit`) |
+
+Only the LoRA adapter weights are updated — the base model stays frozen at 4-bit throughout.
+
+---
+
+### LoRA hyperparameters
+
+| Parameter | Value | Meaning |
+|---|---|---|
+| `r=16` | rank | Size of the low-rank decomposition. Higher = more capacity, more memory |
+| `lora_alpha=16` | scaling | Effective scale = `alpha / r = 1.0` — updates applied at full scale |
+| `lora_dropout=0` | dropout | No dropout on LoRA layers |
+| `target_modules="all-linear"` | scope | LoRA applied to every linear layer (vision encoder + language model) |
+| `bias="none"` | bias | Base model biases frozen; no LoRA bias terms added |
+
+The effective LoRA scaling factor `alpha/r = 16/16 = 1.0` means LoRA updates are applied without amplification or dampening.
+
+Why both `finetune_vision_layers=True` and `finetune_language_layers=True`: ASL translation requires both learning new visual features from signing (vision) and mapping them to English text (language). Freezing either side would bottleneck learning.
+
+---
+
+### Full parameter reference
+
+| Parameter | Value | Why |
+|---|---|---|
+| Optimizer | `adamw_8bit` | Standard for LLM fine-tuning; 8-bit saves VRAM |
+| Weight decay | `0.01` | Light regularisation |
+| Learning rate | `2e-4` | Standard for LoRA fine-tuning |
+| LR schedule | cosine | Smooth decay; avoids sudden loss spikes at end |
+| Warmup steps | `5` | Stabilises early training; small because LoRA weights are small |
+| Batch size | `1 × 4 accum = 4` | VRAM constraint |
+| Precision | `fp16` | RTX 2060 lacks bf16 |
+| Base model quant | 4-bit (QLoRA) | Fits 2B model in ~1.5 GB VRAM |
+| LoRA rank | `16` | Good balance of capacity vs. memory |
+| LoRA alpha | `16` | Scale factor = 1.0 |
+| Seed | `3407` | Reproducibility |
+| Max seq length | `4096` | Fits 8 capped frames + text |
+| Max pixels | `512×28×28` | Caps 1280×720 → 840×448 → 480 tokens/frame |
+
+---
+
+## 5. Summary of all changes
 
 | What | Before | After | Why |
 |---|---|---|---|
