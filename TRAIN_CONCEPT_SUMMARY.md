@@ -1,6 +1,15 @@
-# Training Concept Summary: MAX_SEQ_LENGTH and MAX_PIXELS
+# Training Concept Summary
 
-## The Problem: Why MAX_SEQ_LENGTH=2048 Was Not Enough
+## Table of Contents
+
+1. [MAX_SEQ_LENGTH and MAX_PIXELS — the token budget problem](#1-max_seq_length-and-max_pixels--the-token-budget-problem)
+2. [Validation dataset and early stopping](#2-validation-dataset-and-early-stopping)
+3. [Epoch-based step calculation](#3-epoch-based-step-calculation)
+4. [Summary of all changes](#4-summary-of-all-changes)
+
+---
+
+## 1. MAX_SEQ_LENGTH and MAX_PIXELS — the token budget problem
 
 ### What is MAX_SEQ_LENGTH?
 
@@ -87,9 +96,9 @@ So the real effect of `MAX_SEQ_LENGTH=2048` is not "only reads 1 frame" but rath
 
 ---
 
-## The Fix: Two Changes Working Together
+### The Fix: Two Changes Working Together
 
-### Change 1: Introduce MAX_PIXELS to control image resize
+#### Change 1: Introduce MAX_PIXELS to control image resize
 
 `MAX_PIXELS` sets a ceiling on how many pixels an image can have before the processor resizes it down. If an image exceeds this limit, the processor scales it down proportionally (preserving aspect ratio) and then snaps each dimension to the nearest multiple of 28.
 
@@ -134,7 +143,7 @@ new_height = floor(475.1 / 28) × 28 = 16 × 28 = 448
 
 This is where `MAX_PIXELS = 512 × 28 × 28` comes from: we budget **at most 512 tokens per frame**, which after aspect-ratio rounding gives us 480 in practice.
 
-### Change 2: Raise MAX_SEQ_LENGTH to 4096
+#### Change 2: Raise MAX_SEQ_LENGTH to 4096
 
 With `MAX_PIXELS` capping each frame to ~480 tokens, the full sample now needs:
 
@@ -152,9 +161,7 @@ Setting `MAX_SEQ_LENGTH=4096` gives ~180 tokens of headroom — no truncation oc
 MAX_SEQ_LENGTH = 4096
 ```
 
----
-
-## Why Not Just Raise MAX_SEQ_LENGTH Without MAX_PIXELS?
+### Why Not Just Raise MAX_SEQ_LENGTH Without MAX_PIXELS?
 
 Without the pixel cap, 8 frames at 1280×720 need ~9,000 tokens. To fit that:
 - `MAX_SEQ_LENGTH` would need to be at least 9,200
@@ -165,9 +172,7 @@ The two changes work together:
 - `MAX_PIXELS` reduces visual tokens per frame (3,840 instead of 9,000)
 - `MAX_SEQ_LENGTH=4096` provides enough room for the reduced token count
 
----
-
-## Why Not Resize Frames During Preprocessing?
+### Why Not Resize Frames During Preprocessing?
 
 Resizing could happen at two points:
 1. **During preprocessing** (`extract_frames()`) — save smaller JPEGs to disk
@@ -179,21 +184,145 @@ Approach 2 was chosen because:
 - If you want to experiment with more tokens per frame (e.g. `MAX_PIXELS = 768×28×28`), just change one constant — no re-extraction needed
 - Preprocessing should be model-agnostic; resolution decisions belong to the model pipeline
 
+### Processor pixel cap — transformers 5.x compatibility
+
+In transformers ≥5.0, `Qwen2VLImageProcessorFast` stores the pixel limits inside a `SizeDict`:
+
+```
+self.size["longest_edge"]  ← max_pixels
+self.size["shortest_edge"] ← min_pixels
+```
+
+Two approaches that **do not work**:
+- `tokenizer.image_processor.max_pixels = X` → `AttributeError`: property has no setter
+- Passing `min_pixels=X, max_pixels=X` to `FastVisionModel.from_pretrained()` → `TypeError`: model `__init__` rejects unknown kwargs
+
+The correct approach — direct dict mutation after loading:
+
+```python
+tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
+tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
+```
+
 ---
 
-## Summary of Changes Made
+## 2. Validation dataset and early stopping
+
+### What is early stopping?
+
+Early stopping monitors the model's performance on a held-out **validation set** during training. If the validation loss stops improving, training halts automatically — preventing the model from overfitting to the training data.
+
+Without early stopping, you must choose `max_steps` in advance and hope the model hasn't already started overfitting by then.
+
+### How it is implemented
+
+When `--val-manifest` is provided, `train()`:
+
+1. Loads a second dataset from the val manifest (same format as train).
+2. Passes `eval_dataset=val_dataset` to `SFTTrainer`.
+3. Adds `EarlyStoppingCallback(early_stopping_patience=3)`.
+4. Configures `SFTConfig` with matching eval and save strategies.
+
+```python
+# eval and save must use the same strategy for load_best_model_at_end to work
+eval_strategy  = "steps"
+eval_steps     = 500          # evaluate every 500 training steps
+save_strategy  = "steps"
+save_steps     = 500          # save checkpoint every 500 steps (must match eval_steps)
+load_best_model_at_end = True
+metric_for_best_model  = "eval_loss"
+greater_is_better      = False  # lower loss = better
+```
+
+The `EarlyStoppingCallback` with `patience=3` means:
+- After each eval, if `eval_loss` is not a new minimum → increment patience counter
+- If counter reaches 3 (i.e. 3 consecutive evals with no improvement = 1,500 steps of no improvement) → stop training
+- The best checkpoint (lowest `eval_loss`) is restored at the end
+
+### When no val set is provided
+
+Behaviour is identical to before: no eval, `save_strategy="steps"` with `save_steps=500`. `max_steps` is the only stopping criterion.
+
+### Why use the same manifest for both train and val (testing only)?
+
+During development you can pass the same manifest as both `--manifest-path` and `--val-manifest`. This does not help the model learn (it will overfit) but it verifies the pipeline runs end-to-end without errors. In real training, use a proper held-out val split.
+
+---
+
+## 3. Epoch-based step calculation
+
+### Why compute steps from epochs?
+
+Previously `max_steps=15000` was hardcoded — a rough estimate assuming ~30k training samples. If your manifest has a different number of samples, the hardcoded value silently gives you fewer or more than the intended 2 epochs.
+
+Computing steps from the manifest size makes training length predictable regardless of dataset size.
+
+### The formula
+
+```
+effective_batch_size = per_device_batch_size × gradient_accumulation_steps
+                     = 1 × 4
+                     = 4
+
+steps_per_epoch = ceil(num_samples / effective_batch_size)
+               = ceil(num_samples / 4)
+
+max_steps = steps_per_epoch × num_epochs
+```
+
+**Why `ceil`?** The last batch of an epoch may have fewer than 4 samples. `ceil` ensures that partial batch is still counted as a step, so the model sees every sample.
+
+**Why `effective_batch_size = 4`?** With `per_device_train_batch_size=1` and `gradient_accumulation_steps=4`, the optimizer updates once every 4 forward passes. From the dataset's perspective, one optimizer step consumes 4 samples.
+
+### Example
+
+```
+num_samples     = 31,128   (How2Sign train split)
+steps_per_epoch = ceil(31,128 / 4) = 7,782
+max_steps (2 epochs) = 7,782 × 2 = 15,564
+```
+
+At startup, `train()` prints:
+```
+Training: 31128 samples, 2 epoch(s) → 7782 steps/epoch = 15564 computed steps (max_steps=15564)
+```
+
+### Overriding with --max-steps
+
+`--max-steps` overrides the epoch calculation entirely. This is useful for:
+- Quick smoke tests: `--max-steps 50`
+- Resuming from a checkpoint partway through
+
+When `--max-steps` is used, `--epochs` still controls the output directory name unless `--output-dir` is explicitly set.
+
+### Output directory naming
+
+| Command | Output dir suffix |
+|---|---|
+| `--epochs 2` (default) | `_ep2` |
+| `--epochs 3` | `_ep3` |
+| `--max-steps 300` | `_steps300` |
+| `--epochs 2 --max-steps 300` | `_steps300` (max-steps wins) |
+
+---
+
+## 4. Summary of all changes
 
 | What | Before | After | Why |
 |---|---|---|---|
 | `MAX_SEQ_LENGTH` | `2048` | `4096` | 2048 truncated all but ~1.8 frames |
-| `MAX_PIXELS` | not set (no cap) | `512 × 28 × 28 = 401,408` | Without cap, 9,000 tokens/sample — OOM on RTX 2060 |
-| Processor cap in `train()` | not applied | `tokenizer.image_processor.max_pixels = MAX_PIXELS` | Ensures resize happens consistently during training |
-| Processor cap in `run_inference()` | not applied | `tokenizer.image_processor.max_pixels = MAX_PIXELS` | Ensures same tokenization as training during evaluation |
+| `MAX_PIXELS` | not set | `512 × 28 × 28 = 401,408` | Without cap: 9,000 tokens/sample → OOM on RTX 2060 |
+| Processor pixel cap | not applied | `size["longest_edge"] = MAX_PIXELS` | transformers 5.x has no property setter; dict mutation is the only working API |
+| Training length control | `max_steps=15000` hardcoded | `--epochs N` → auto-computed from manifest | Hardcoded steps are wrong for datasets other than 30k samples |
+| Validation / early stopping | not supported | `--val-manifest` → `EarlyStoppingCallback(patience=3)` | Prevents overfitting; restores best checkpoint automatically |
+| Output directory | `asl_lora_output/` (static) | `runs/run_YYYYMMDD_HHMMSS_ep2/` (timestamped) | Keeps each run separate; no accidental overwrites |
 
-### Final token budget (after fix)
+### Final token budget
 
 ```
 8 frames × 480 tokens/frame = 3,840 visual tokens
-+ ~65 text tokens
-= ~3,905 total  <  MAX_SEQ_LENGTH=4096  ✓
++ ~30  chat template
++ ~15  prompt
++ ~30  answer (worst case)
+= ~3,915 total  <  MAX_SEQ_LENGTH=4096  ✓  (181 tokens headroom)
 ```

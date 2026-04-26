@@ -1,7 +1,71 @@
-# Usage:
-#   python train.py --epochs 2                                ← full run (auto-computes steps from manifest)
-#   python train.py --epochs 2 --val-manifest val.jsonl       ← with early stopping
-#   python train.py --max-steps 300 --output-dir my_output/   ← quick test (overrides epoch calculation)
+# ─────────────────────────────────────────────────────────────────────────────
+# train.py — ASL fine-tuning pipeline (Qwen3-VL-2B + Unsloth QLoRA)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# USAGE
+# ─────
+#   Full run (2 epochs, steps auto-computed from manifest size):
+#     python train.py --manifest-path datasets/processed/manifest.jsonl
+#
+#   Custom epoch count:
+#     python train.py --manifest-path ... --epochs 3
+#
+#   With validation set (enables early stopping):
+#     python train.py --manifest-path datasets/processed/train.jsonl \
+#                     --val-manifest  datasets/processed/val.jsonl   \
+#                     --epochs 2
+#
+#   Quick test (override computed steps, e.g. 300 steps only):
+#     python train.py --manifest-path ... --max-steps 300 --output-dir my_output/
+#
+# STEP CALCULATION
+# ────────────────
+#   effective_batch_size = per_device_batch_size(1) × gradient_accumulation(4) = 4
+#   steps_per_epoch      = ceil(num_samples / 4)
+#   max_steps            = steps_per_epoch × num_epochs
+#
+#   Example: 30,000 samples → 7,500 steps/epoch × 2 epochs = 15,000 steps
+#   Pass --max-steps to override (e.g. for a smoke test).
+#
+# OUTPUT DIRECTORIES
+# ──────────────────
+#   Auto-generated when --output-dir is omitted:
+#     runs/run_YYYYMMDD_HHMMSS_ep2       ← epoch-based run
+#     runs/run_YYYYMMDD_HHMMSS_steps300  ← max-steps override
+#
+# EARLY STOPPING
+# ──────────────
+#   Activated automatically when --val-manifest is provided.
+#   Evaluates every 500 steps; stops if val_loss does not improve for
+#   3 consecutive evals (patience=3); restores best checkpoint at end.
+#
+# TOKEN BUDGET (why MAX_SEQ_LENGTH=4096 and MAX_PIXELS=512×28×28)
+# ────────────────────────────────────────────────────────────────
+#   Without MAX_PIXELS cap: 1280×720 frames → 1,125 tokens/frame × 8 = 9,000
+#   tokens per sample — far exceeds any reasonable seq length and causes OOM.
+#
+#   With MAX_PIXELS = 512×28×28 = 401,408: processor resizes 1280×720 → 840×448
+#   → 480 tokens/frame × 8 frames = 3,840 visual tokens.
+#
+#   Full sample budget:
+#     3,840  visual tokens (8 frames)
+#   +    30  chat template overhead
+#   +    15  prompt text
+#   +    30  ground-truth answer (worst case)
+#   = ~3,915  total  <  MAX_SEQ_LENGTH=4096  ✓ (181 tokens headroom)
+#
+#   See TRAIN_CONCEPT_SUMMARY.md for full derivation.
+#
+# PROCESSOR PIXEL CAP — transformers 5.x compatibility note
+# ──────────────────────────────────────────────────────────
+#   Qwen2VLImageProcessorFast (transformers ≥5.0) stores the pixel limits
+#   inside self.size["longest_edge"] / self.size["shortest_edge"].
+#   The max_pixels property has no setter → AttributeError if assigned.
+#   Passing as from_pretrained kwargs → TypeError (model __init__ rejects them).
+#   Correct approach: mutate the size dict directly after loading:
+#     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
+#     tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
+# ─────────────────────────────────────────────────────────────────────────────
 
 """ASL fine-tuning pipeline using Unsloth FastVisionModel + QLoRA."""
 
