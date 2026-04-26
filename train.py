@@ -98,15 +98,37 @@ def train(
     # 2) Sets the model to train mode — activates dropout, batch norm updates, etc.
     # 3) Ensures LoRA adapters are trainable — makes sure only the LoRA parameters have gradients enabled, while the frozen base model weights stay untrainable.
 
-    # 3. Load dataset
-    dataset = load_training_dataset(manifest_path)
+    # 3. Load datasets
+    train_dataset = load_training_dataset(manifest_path)
+    val_dataset = load_training_dataset(val_manifest_path) if val_manifest_path else None
 
     # 4. Train
+    from transformers import EarlyStoppingCallback
+
+    # Eval args are only added when a val set is provided.
+    # load_best_model_at_end requires save_strategy == eval_strategy.
+    eval_args = dict(
+        eval_strategy="steps",
+        eval_steps=500,
+        save_strategy="steps",
+        save_steps=500,
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+    ) if val_dataset is not None else dict(
+        save_strategy="steps",
+        save_steps=500,
+    )
+
+    callbacks = [EarlyStoppingCallback(early_stopping_patience=3)] if val_dataset is not None else []
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,           # None when no val set → SFTTrainer ignores it
         data_collator=UnslothVisionDataCollator(model, tokenizer),
+        callbacks=callbacks,
         args=SFTConfig(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=4,
@@ -127,6 +149,7 @@ def train(
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
             max_length=MAX_SEQ_LENGTH,
+            **eval_args,
         ),
     )
     trainer.train()
