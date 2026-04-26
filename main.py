@@ -28,7 +28,9 @@ def main() -> None:
             n_frames=args.n_frames,
         )
     elif args.train:
-        train_module.train(max_steps=args.max_steps)
+        from train import _make_run_dir
+        output_dir = _make_run_dir(args.max_steps)
+        train_module.train(max_steps=args.max_steps, output_dir=output_dir)
     else:
         print("No action specified. Use --preprocess or --train.")
 

@@ -8,3 +8,14 @@ technique
 7. SFT + RLHF: A two-stage process—first supervised fine-tuning, then RLHF.
 8. Adapter Tuning: Adds small adapter modules to the model and only trains those.
 9. Prompt Tuning / Prefix Tuning: Only optimizes special prompt or prefix tokens, not the model weights.
+
+models
+Lightweight Vision-Language Models (≤4B) compatible with Unsloth FastVisionModel:
+
+1. unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit     ← currently using (latest gen, 2B)
+2. unsloth/Qwen2.5-VL-3B-Instruct-unsloth-bnb-4bit    ← best upgrade (50% larger, Qwen2.5)
+3. unsloth/Qwen2-VL-2B-Instruct-unsloth-bnb-4bit      ← older gen, no reason to switch
+4. unsloth/gemma-3-4b-it-unsloth-bnb-4bit             ← Google alternative (4B)
+5. unsloth/gemma-3n-E4B-it-unsloth-bnb-4bit           ← Google GemmaN variant (4B)
+
+All models use the same ChatML format — switching requires only changing MODEL_NAME in train.py.

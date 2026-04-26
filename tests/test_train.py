@@ -62,3 +62,19 @@ def test_load_training_dataset_images_are_paths(tmp_path):
     for entry in image_entries:
         assert isinstance(entry["image"], str), f"Expected string path, got {type(entry['image'])}"
         assert Path(entry["image"]).suffix == ".jpg"
+
+
+def test_max_seq_length_fits_8_frames():
+    from train import MAX_SEQ_LENGTH
+    # 8 frames of 1280x720 at max_pixels=512*28*28 ≈ 270 tokens/frame = ~2160
+    # Plus text overhead ~65 → minimum safe value is 4096
+    assert MAX_SEQ_LENGTH >= 4096, (
+        f"MAX_SEQ_LENGTH={MAX_SEQ_LENGTH} is too small for 8 frames; need >= 4096"
+    )
+
+
+def test_max_pixels_constant_defined():
+    from train import MAX_PIXELS
+    assert MAX_PIXELS == 512 * 28 * 28, (
+        f"MAX_PIXELS should be 512*28*28=401408, got {MAX_PIXELS}"
+    )

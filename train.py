@@ -1,8 +1,13 @@
+# Usage:
+#   python train.py --max-steps 300                          ← final project (recommended)
+#   python train.py --max-steps 60 --output-dir my_output/   ← quick test
+
 """ASL fine-tuning pipeline using Unsloth FastVisionModel + QLoRA."""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -10,7 +15,8 @@ MANIFEST_PATH = Path("datasets/processed/manifest.jsonl")
 OUTPUT_DIR = "asl_lora_output"
 MODEL_NAME = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
 PROMPT = "Translate this American Sign Language video into English text."
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 4096  # 8 frames × ~270 tokens/frame (capped) + text overhead fits in 4096
+MAX_PIXELS = 512 * 28 * 28  # cap per-frame to ~270 tokens; 8 frames ≈ 2160 visual tokens
 
 
 def _record_to_sample(record: dict) -> dict:
@@ -49,7 +55,7 @@ def train(
     max_steps: int = 60,
     output_dir: str = OUTPUT_DIR,
 ) -> None:
-    """Fine-tune Qwen2.5-VL-2B-Instruct on ASL frames with QLoRA."""
+    """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA."""
     import torch
     from unsloth import FastVisionModel # allow to load and fine-tune VLLM using unsloth utilities
     from unsloth.trainer import UnslothVisionDataCollator # use to prepare batches of VLLM data (image, text) for training, handling the format and batching required by the model during fine-tuning
@@ -59,8 +65,12 @@ def train(
     model, tokenizer = FastVisionModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True, # load model weight in 4-bit precision(quantized) -> required for QLoRA(Quantized Low-Rank Adapter) training
+        load_in_4bit=True,
     )
+    # Cap image resolution so 8 frames of 1280×720 stay within MAX_SEQ_LENGTH.
+    # Without this, 1280×720 = 1125 tokens/frame × 8 = 9000 tokens >> 4096.
+    tokenizer.image_processor.max_pixels = MAX_PIXELS
+    tokenizer.image_processor.min_pixels = 4 * 28 * 28
     # 4-bit: Uses the least memory (about 4× smaller than 16-bit), fastest, but may lose some accuracy. Enables training very large models on consumer GPUs. Used for QLoRA.
     # 8-bit: Uses more memory than 4-bit but less than 16-bit. Good balance between efficiency and accuracy, with minimal quality loss.
     # 16-bit (fp16/bf16): Standard for most training, highest accuracy, but uses the most memory and compute. Needed for full-precision tasks.
@@ -137,14 +147,21 @@ def cli() -> None:
                         help="Path to manifest.jsonl")
     parser.add_argument("--max-steps", type=int, default=60,
                         help="Training steps (default: 60)")
-    parser.add_argument("--output-dir", type=str, default=OUTPUT_DIR,
-                        help="Output directory for LoRA adapters")
+    parser.add_argument("--output-dir", type=str, default=None,
+                        help="Output directory for LoRA adapters (auto-generated when omitted)")
     args = parser.parse_args()
+    output_dir = args.output_dir or _make_run_dir(args.max_steps)
     train(
         manifest_path=args.manifest_path,
         max_steps=args.max_steps,
-        output_dir=args.output_dir,
+        output_dir=output_dir,
     )
+
+
+def _make_run_dir(max_steps: int) -> str:
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    name = f"runs/run_{ts}_steps{max_steps}"
+    return name
 
 
 if __name__ == "__main__":
