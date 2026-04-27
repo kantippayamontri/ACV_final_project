@@ -90,8 +90,8 @@ MANIFEST_PATH = Path("datasets/processed/manifest.jsonl")
 OUTPUT_DIR = "asl_lora_output"
 MODEL_NAME = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
 PROMPT = "Translate this American Sign Language video into English text."
-MAX_SEQ_LENGTH = 4096  # 8 frames × ~270 tokens/frame (capped) + text overhead fits in 4096
-MAX_PIXELS = 512 * 28 * 28  # cap per-frame to ~270 tokens; 8 frames ≈ 2160 visual tokens
+MAX_SEQ_LENGTH = 5120 * 2  # 8 frames × ~270 tokens/frame (capped) + text overhead fits in 4096
+MAX_PIXELS = 512 * 32 * 32  # cap per-frame to ~270 tokens; 8 frames ≈ 2160 visual tokens
 
 
 def _record_to_sample(record: dict) -> dict:
@@ -166,7 +166,7 @@ def train(
     # passing as from_pretrained kwargs fails because the model __init__ rejects them.
     # Direct dict mutation is the only working approach.
     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
-    tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
+    tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
     # 4-bit: Uses the least memory (about 4× smaller than 16-bit), fastest, but may lose some accuracy. Enables training very large models on consumer GPUs. Used for QLoRA.
     # 8-bit: Uses more memory than 4-bit but less than 16-bit. Good balance between efficiency and accuracy, with minimal quality loss.
     # 16-bit (fp16/bf16): Standard for most training, highest accuracy, but uses the most memory and compute. Needed for full-precision tasks.
@@ -238,8 +238,8 @@ def train(
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         callbacks=callbacks,
         args=SFTConfig(
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=4,
+            per_device_train_batch_size=EFFECTIVE_BATCH,
+            gradient_accumulation_steps=1,
             warmup_steps=5,
             max_steps=max_steps,
             learning_rate=2e-4,

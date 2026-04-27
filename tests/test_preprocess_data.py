@@ -28,6 +28,7 @@ def test_preprocess_data_main_calls_build_manifest(tmp_path):
                 "--videos", str(videos),
                 "--out", str(out),
                 "--n-frames", "4",
+                "--workers", "3",
             ]
             with patch.object(sys, "argv", argv):
                 import preprocess_data
@@ -35,4 +36,4 @@ def test_preprocess_data_main_calls_build_manifest(tmp_path):
 
                 preprocess_data.main()
 
-    mock_build.assert_called_once_with(tsv, videos, out, n_frames=4, show_progress=True)
+    mock_build.assert_called_once_with(tsv, videos, out, n_frames=4, show_progress=True, workers=3)

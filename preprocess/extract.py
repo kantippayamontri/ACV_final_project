@@ -5,11 +5,14 @@ from __future__ import annotations
 import csv
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, TypeVar
 
 import cv2
 import numpy as np
+
+T = TypeVar("T")
 
 
 def extract_frames(
@@ -51,6 +54,7 @@ def build_manifest(
     out_dir: Path,
     n_frames: int = 8, #number of frame per video
     show_progress: bool = False,
+    workers: int = 1,
 ) -> Path:
     """Extract frames for every clip in the TSV and write manifest.jsonl.
 
@@ -60,6 +64,8 @@ def build_manifest(
     frames_root = out_dir / "frames"
     manifest_path = out_dir / "manifest.jsonl"
     out_dir.mkdir(parents=True, exist_ok=True)
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
 
     with open(tsv_path, newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
@@ -75,29 +81,32 @@ def build_manifest(
                     done.add(json.loads(line)["clip_name"])
 
     skipped = 0
+    tasks: list[tuple[str, str, Path, Path, int]] = []
+    for row in rows:
+        clip_name = row["SENTENCE_NAME"].strip()
+        if clip_name in done: #already process
+            continue
+        sentence = row["SENTENCE"].strip()
+        mp4_path = videos_dir / f"{clip_name}.mp4"
+        if not mp4_path.exists(): # check for video exist for extracting frames or not
+            skipped += 1
+            continue
+        clip_out_dir = frames_root / clip_name
+        tasks.append((clip_name, sentence, mp4_path, clip_out_dir, n_frames))
+
     written = 0
     with open(manifest_path, "a") as mf:
-        for row in _progress(rows, enabled=show_progress, label="Preprocessing clips"):
-            clip_name = row["SENTENCE_NAME"].strip()
-            if clip_name in done: #already process
-                continue
-            sentence = row["SENTENCE"].strip()
-            mp4_path = videos_dir / f"{clip_name}.mp4"
-            if not mp4_path.exists(): # check for video exist for extracting frames or not
+        results = _extract_records(tasks, workers=workers)
+        for clip_name, record, error in _progress(
+            results,
+            enabled=show_progress,
+            label="Extracting clips",
+            total=len(tasks),
+        ):
+            if error is not None:
+                print(f"[WARN] Skipping {clip_name}: {error}")
                 skipped += 1
                 continue
-            clip_out_dir = frames_root / clip_name
-            try:
-                frame_paths = extract_frames(mp4_path, clip_out_dir, n_frames)
-            except ValueError as e:
-                print(f"[WARN] Skipping {clip_name}: {e}")
-                skipped += 1
-                continue
-            record = {
-                "clip_name": clip_name,
-                "sentence": sentence,
-                "frame_paths": [str(p) for p in frame_paths],
-            }
             mf.write(json.dumps(record) + "\n")
             written += 1
 
@@ -106,18 +115,22 @@ def build_manifest(
 
 
 def _progress(
-    items: Iterable[dict[str, str]],
+    items: Iterable[T],
     *,
     enabled: bool,
     label: str,
-) -> Iterator[dict[str, str]]:
+    total: int | None = None,
+) -> Iterator[T]:
     """Yield items while printing a compact terminal progress bar."""
     if not enabled:
         yield from items
         return
 
-    item_list = list(items)
-    total = len(item_list)
+    if total is None:
+        item_list = list(items)
+        total = len(item_list)
+        items = item_list
+
     if total == 0:
         print(f"{label}: no rows found", file=sys.stderr)
         return
@@ -136,7 +149,40 @@ def _progress(
         )
 
     render(0)
-    for index, item in enumerate(item_list, start=1):
+    for index, item in enumerate(items, start=1):
         yield item
         render(index)
     print(file=sys.stderr)
+
+
+def _extract_records(
+    tasks: list[tuple[str, str, Path, Path, int]],
+    *,
+    workers: int,
+) -> Iterator[tuple[str, dict[str, object] | None, str | None]]:
+    if workers == 1:
+        for task in tasks:
+            yield _extract_record(task)
+        return
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(_extract_record, task) for task in tasks]
+        for future in as_completed(futures):
+            yield future.result()
+
+
+def _extract_record(
+    task: tuple[str, str, Path, Path, int],
+) -> tuple[str, dict[str, object] | None, str | None]:
+    clip_name, sentence, mp4_path, clip_out_dir, n_frames = task
+    try:
+        frame_paths = extract_frames(mp4_path, clip_out_dir, n_frames)
+    except ValueError as e:
+        return clip_name, None, str(e)
+
+    record = {
+        "clip_name": clip_name,
+        "sentence": sentence,
+        "frame_paths": [str(p) for p in frame_paths],
+    }
+    return clip_name, record, None
