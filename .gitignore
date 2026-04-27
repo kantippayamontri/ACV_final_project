@@ -1,7 +1,10 @@
 runs/
 docs/
 unsloth_compiled_cache/
-datasets/
+dataset/
+*.csv
+*.zip
+.DS_Store
 # Python-generated files
 __pycache__/
 *.py[oc]

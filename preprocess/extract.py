@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from pathlib import Path
+from typing import Iterable, Iterator
 
 import cv2
 import numpy as np
@@ -48,6 +50,7 @@ def build_manifest(
     videos_dir: Path, # clips path
     out_dir: Path,
     n_frames: int = 8, #number of frame per video
+    show_progress: bool = False,
 ) -> Path:
     """Extract frames for every clip in the TSV and write manifest.jsonl.
 
@@ -74,7 +77,7 @@ def build_manifest(
     skipped = 0
     written = 0
     with open(manifest_path, "a") as mf:
-        for row in rows:
+        for row in _progress(rows, enabled=show_progress, label="Preprocessing clips"):
             clip_name = row["SENTENCE_NAME"].strip()
             if clip_name in done: #already process
                 continue
@@ -100,3 +103,40 @@ def build_manifest(
 
     print(f"Manifest updated: {manifest_path} (new={written}, skipped={skipped}, already_done={len(done)})")
     return manifest_path
+
+
+def _progress(
+    items: Iterable[dict[str, str]],
+    *,
+    enabled: bool,
+    label: str,
+) -> Iterator[dict[str, str]]:
+    """Yield items while printing a compact terminal progress bar."""
+    if not enabled:
+        yield from items
+        return
+
+    item_list = list(items)
+    total = len(item_list)
+    if total == 0:
+        print(f"{label}: no rows found", file=sys.stderr)
+        return
+
+    bar_width = 30
+
+    def render(done: int) -> None:
+        filled = int(bar_width * done / total)
+        bar = "#" * filled + "-" * (bar_width - filled)
+        percent = int(100 * done / total)
+        print(
+            f"\r{label}: |{bar}| {done}/{total} ({percent:3d}%)",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    render(0)
+    for index, item in enumerate(item_list, start=1):
+        yield item
+        render(index)
+    print(file=sys.stderr)

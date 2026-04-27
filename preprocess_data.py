@@ -23,11 +23,18 @@ def main() -> None:
     parser.add_argument("--videos", type=Path, default=DEFAULT_VIDEOS, help="Directory containing MP4 files")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="Output directory for frames and manifest.jsonl")
     parser.add_argument("--n-frames", type=int, default=8, help="Frames to extract per clip (default: 8)")
+    parser.add_argument("--no-progress", action="store_true", help="Disable preprocessing progress bar")
     args = parser.parse_args()
 
     from preprocess.extract import build_manifest
 
-    build_manifest(args.tsv, args.videos, args.out, n_frames=args.n_frames)
+    build_manifest(
+        args.tsv,
+        args.videos,
+        args.out,
+        n_frames=args.n_frames,
+        show_progress=not args.no_progress,
+    )
 
 
 if __name__ == "__main__":
