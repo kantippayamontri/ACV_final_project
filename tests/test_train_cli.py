@@ -24,6 +24,7 @@ def test_train_cli_passes_args_to_train(tmp_path):
             num_epochs=2,
             max_steps=10,
             output_dir=str(tmp_path / "out"),
+            resume_from_checkpoint=None,
         )
 
 
@@ -108,3 +109,68 @@ def test_train_cli_passes_val_manifest_to_train(tmp_path):
 
         call_kwargs = mock_train.call_args.kwargs
         assert call_kwargs["val_manifest_path"] == val_manifest
+
+
+def test_train_cli_resume_arg(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+
+    with patch("train.train") as mock_train:
+        argv = [
+            "train.py",
+            "--manifest-path", str(manifest),
+            "--max-steps", "10",
+            "--output-dir", str(tmp_path / "out"),
+            "--resume", "asl_lora_output/checkpoint-870",
+        ]
+        with patch.object(sys, "argv", argv):
+            from train import cli
+            cli()
+
+        call_kwargs = mock_train.call_args.kwargs
+        assert call_kwargs["resume_from_checkpoint"] == "asl_lora_output/checkpoint-870"
+        assert call_kwargs["output_dir"] == str(tmp_path / "out")
+        assert call_kwargs["max_steps"] == 10
+
+
+def test_train_cli_resume_auto_generates_output_dir(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+
+    with patch("train.train") as mock_train:
+        argv = [
+            "train.py",
+            "--manifest-path", str(manifest),
+            "--epochs", "2",
+            "--resume", "runs/run_20260426_ep2/checkpoint-500",
+        ]
+        with patch.object(sys, "argv", argv):
+            from train import cli
+            cli()
+
+        call_kwargs = mock_train.call_args.kwargs
+        assert call_kwargs["resume_from_checkpoint"] == "runs/run_20260426_ep2/checkpoint-500"
+        assert call_kwargs["output_dir"].startswith("runs/run_")
+        assert call_kwargs["output_dir"].endswith("_ep2")
+
+
+def test_train_cli_resume_with_custom_output_dir(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+
+    with patch("train.train") as mock_train:
+        argv = [
+            "train.py",
+            "--manifest-path", str(manifest),
+            "--max-steps", "20",
+            "--output-dir", str(tmp_path / "custom_resumed"),
+            "--resume", "some/other/checkpoint-123",
+        ]
+        with patch.object(sys, "argv", argv):
+            from train import cli
+            cli()
+
+        call_kwargs = mock_train.call_args.kwargs
+        assert call_kwargs["resume_from_checkpoint"] == "some/other/checkpoint-123"
+        assert call_kwargs["output_dir"] == str(tmp_path / "custom_resumed")
+        assert call_kwargs["max_steps"] == 20

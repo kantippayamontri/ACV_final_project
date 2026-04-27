@@ -18,6 +18,15 @@
 #   Quick test (override computed steps, e.g. 300 steps only):
 #     python train.py --manifest-path ... --max-steps 300 --output-dir my_output/
 #
+#   Resume from a checkpoint (continues training from saved state):
+#     python train.py --resume asl_lora_output/checkpoint-870
+#
+#   Resume with custom output directory:
+#     python train.py --resume checkpoint-870 --output-dir my_resumed_run/
+#
+#   Resume and extend training steps:
+#     python train.py --resume asl_lora_output/checkpoint-870 --max-steps 2000
+#
 # STEP CALCULATION
 # ────────────────
 #   effective_batch_size = per_device_batch_size(1) × gradient_accumulation(4) = 4
@@ -132,6 +141,7 @@ def train(
     num_epochs: int = 2,
     max_steps: int | None = None,
     output_dir: str = OUTPUT_DIR,
+    resume_from_checkpoint: str | None = None,
 ) -> None:
     """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA.
 
@@ -250,7 +260,7 @@ def train(
             **eval_args,
         ),
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
     # 5. Save LoRA adapters
     model.save_pretrained(output_dir)
@@ -275,6 +285,8 @@ def cli() -> None:
                         help="Override computed steps (e.g. 300 for a quick test); takes precedence over --epochs")
     parser.add_argument("--output-dir", type=str, default=None,
                         help="Output directory for LoRA adapters (auto-generated when omitted)")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Resume training from a checkpoint folder (e.g. asl_lora_output/checkpoint-870)")
     args = parser.parse_args()
     output_dir = args.output_dir or _make_run_dir(args.epochs, args.max_steps)
     train(
@@ -283,6 +295,7 @@ def cli() -> None:
         num_epochs=args.epochs,
         max_steps=args.max_steps,
         output_dir=output_dir,
+        resume_from_checkpoint=args.resume,
     )
 
 
