@@ -2,6 +2,7 @@ runs/
 docs/
 unsloth_compiled_cache/
 dataset/
+datasets/
 *.csv
 *.zip
 .DS_Store
