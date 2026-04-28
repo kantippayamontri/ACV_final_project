@@ -151,16 +151,16 @@ def train(
     explicitly provided.  Pass max_steps to override (e.g. for a quick test).
     """
     import torch
-    from trl import (  # SFTTrainer = class for supervised fine-tuning (SFT), SFTConfig = use to config training parameters like batch size, steps, optimizers
-        SFTConfig,
-        SFTTrainer,
-    )
     from unsloth import (
         FastVisionModel,
     )  # allow to load and fine-tune VLLM using unsloth utilities
     from unsloth.trainer import (
         UnslothVisionDataCollator,
     )  # use to prepare batches of VLLM data (image, text) for training, handling the format and batching required by the model during fine-tuning
+    from trl import (  # SFTTrainer = class for supervised fine-tuning (SFT), SFTConfig = use to config training parameters like batch size, steps, optimizers
+        SFTConfig,
+        SFTTrainer,
+    )
 
     # 1. Load model
     model, tokenizer = FastVisionModel.from_pretrained(
@@ -211,7 +211,7 @@ def train(
 
     # Compute max_steps from epochs if not explicitly overridden.
     # effective batch size = per_device_batch(1) × grad_accum(4) = 4
-    EFFECTIVE_BATCH = 24
+    EFFECTIVE_BATCH = 48
     num_samples = _count_manifest_samples(manifest_path)
     steps_per_epoch = math.ceil(num_samples / EFFECTIVE_BATCH)
     computed_steps = steps_per_epoch * num_epochs
