@@ -252,7 +252,7 @@ def train(
         args=SFTConfig(
             per_device_train_batch_size=EFFECTIVE_BATCH,
             gradient_accumulation_steps=1,
-            warmup_steps=5,
+            warmup_steps=max(1, int(max_steps * 0.1)),
             max_steps=max_steps,
             learning_rate=2e-4,
             fp16=not torch.cuda.is_bf16_supported(),
