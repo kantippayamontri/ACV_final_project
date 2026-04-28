@@ -65,7 +65,7 @@ def test_train_cli_auto_generates_output_dir_with_epochs(tmp_path):
         call_kwargs = mock_train.call_args.kwargs
         assert call_kwargs["num_epochs"] == 2
         assert call_kwargs["max_steps"] is None
-        assert call_kwargs["output_dir"].startswith("runs/run_")
+        assert "/runs/" in call_kwargs["output_dir"]
         assert call_kwargs["output_dir"].endswith("_ep2")
 
 
@@ -85,7 +85,7 @@ def test_train_cli_auto_generates_output_dir_with_max_steps(tmp_path):
 
         call_kwargs = mock_train.call_args.kwargs
         assert call_kwargs["max_steps"] == 42
-        assert call_kwargs["output_dir"].startswith("runs/run_")
+        assert "/runs/" in call_kwargs["output_dir"]
         assert call_kwargs["output_dir"].endswith("_steps42")
 
 
@@ -150,7 +150,7 @@ def test_train_cli_resume_auto_generates_output_dir(tmp_path):
 
         call_kwargs = mock_train.call_args.kwargs
         assert call_kwargs["resume_from_checkpoint"] == "runs/run_20260426_ep2/checkpoint-500"
-        assert call_kwargs["output_dir"].startswith("runs/run_")
+        assert "/runs/" in call_kwargs["output_dir"]
         assert call_kwargs["output_dir"].endswith("_ep2")
 
 

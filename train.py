@@ -338,7 +338,8 @@ def cli() -> None:
 def _make_run_dir(num_epochs: int, max_steps: int | None) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     suffix = f"steps{max_steps}" if max_steps is not None else f"ep{num_epochs}"
-    return f"runs/run_{ts}_{suffix}"
+    project_root = Path(__file__).parent
+    return str(project_root / "runs" / f"run_{ts}_{suffix}")
 
 
 if __name__ == "__main__":
