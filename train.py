@@ -211,7 +211,7 @@ def train(
 
     # Compute max_steps from epochs if not explicitly overridden.
     # effective batch size = per_device_batch(1) × grad_accum(4) = 4
-    EFFECTIVE_BATCH = 48
+    EFFECTIVE_BATCH = 48 
     num_samples = _count_manifest_samples(manifest_path)
     steps_per_epoch = math.ceil(num_samples / EFFECTIVE_BATCH)
     computed_steps = steps_per_epoch * num_epochs
@@ -339,7 +339,8 @@ def _make_run_dir(num_epochs: int, max_steps: int | None) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     suffix = f"steps{max_steps}" if max_steps is not None else f"ep{num_epochs}"
     project_root = Path(__file__).parent
-    return str(project_root / "runs" / f"run_{ts}_{suffix}")
+    # return str(project_root / "runs" / f"run_{ts}_{suffix}")
+    return str(project_root)
 
 
 if __name__ == "__main__":
