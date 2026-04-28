@@ -18,15 +18,17 @@
 
 ### How Qwen3-VL converts images to tokens
 
-Qwen3-VL's vision encoder works by dividing each image into a grid of **28×28 pixel patches**. Each patch becomes one vision token.
+Qwen3-VL's vision encoder works by dividing each image into a grid of **32×32 pixel patches**. Each patch becomes one vision token.
+
+> Note: Qwen2-VL used 28×28 patches. Qwen3-VL upgraded to 32×32. Using 28 with Qwen3-VL produces misaligned token counts.
 
 ```
-tokens per image = (width / 28) × (height / 28)
+tokens per image = (width / 32) × (height / 32)
 ```
 
-For example, a 224×224 image:
+For example, a 256×256 image:
 ```
-(224 / 28) × (224 / 28) = 8 × 8 = 64 tokens
+(256 / 32) × (256 / 32) = 8 × 8 = 64 tokens
 ```
 
 ### Your frames: 1280×720
@@ -34,13 +36,13 @@ For example, a 224×224 image:
 The extracted frames from How2Sign are saved at **1280×720 pixels**. Plugging into the formula:
 
 ```
-(1280 / 28) × (720 / 28) = 45.7 × 25.7 ≈ 45 × 25 = 1,125 tokens per frame
+(1280 / 32) × (720 / 32) = 40 × 22 = 880 tokens per frame
 ```
 
 With 8 frames per clip, the total token budget for images alone:
 
 ```
-8 frames × 1,125 tokens = 9,000 visual tokens
+8 frames × 880 tokens = 7,040 visual tokens
 ```
 
 ### Why MAX_SEQ_LENGTH=2048 failed
@@ -49,19 +51,19 @@ A full training sample contains:
 
 | Component | Tokens |
 |---|---|
-| 8 frames (1280×720, no resize) | ~9,000 |
+| 8 frames (1280×720, no resize) | ~7,040 |
 | Chat template overhead | ~30 |
 | Prompt text ("Translate this ASL video...") | ~15 |
 | Ground truth sentence (assistant answer) | ~10–30 |
-| **Total needed** | **~9,055** |
+| **Total needed** | **~7,095** |
 
-At `MAX_SEQ_LENGTH=2048`, the trainer truncates everything beyond token 2048. Since image tokens come first in the sequence, only the first ~1.8 frames worth of vision tokens survive:
+At `MAX_SEQ_LENGTH=2048`, the trainer truncates everything beyond token 2048. Since image tokens come first in the sequence, only the first ~2.3 frames worth of vision tokens survive:
 
 ```
-2048 tokens / 1125 tokens per frame ≈ 1.8 frames
+2048 tokens / 880 tokens per frame ≈ 2.3 frames
 ```
 
-The model was effectively training on less than 2 frames out of 8 — seeing only a small portion of each sign — which severely limits what it can learn about ASL.
+The model was effectively training on ~2 frames out of 8 — seeing only a small portion of each sign — which severely limits what it can learn about ASL.
 
 ### What exactly gets cut off
 
@@ -71,27 +73,27 @@ The sequence is built in this order before truncation:
 [chat template] → [frame_1 tokens] → [frame_2 tokens] → ... → [frame_8 tokens] → [prompt text] → [answer]
 ```
 
-With 1,125 tokens per frame at 1280×720:
+With 880 tokens per frame at 1280×720:
 
 ```
-frame_1 : tokens    1 – 1,125   ✓ fully seen
-frame_2 : tokens 1,126 – 2,250  ✗ cut at token 2,048 — only 82% survives (partial frame)
-frame_3 : tokens 2,251 – 3,375  ✗ never seen
-frame_4 : tokens 3,376 – 4,500  ✗ never seen
-frame_5 : tokens 4,501 – 5,625  ✗ never seen
-frame_6 : tokens 5,626 – 6,750  ✗ never seen
-frame_7 : tokens 6,751 – 7,875  ✗ never seen
-frame_8 : tokens 7,876 – 9,000  ✗ never seen
-prompt  : tokens 9,001 – 9,016  ✗ never seen
-answer  : tokens 9,017 – 9,050  ✗ never seen  ← ground truth lost
+frame_1 : tokens    1 –   880   ✓ fully seen
+frame_2 : tokens  881 – 1,760   ✓ fully seen
+frame_3 : tokens 1,761 – 2,640  ✗ cut at token 2,048 — only ~33% survives (partial frame)
+frame_4 : tokens 2,641 – 3,520  ✗ never seen
+frame_5 : tokens 3,521 – 4,400  ✗ never seen
+frame_6 : tokens 4,401 – 5,280  ✗ never seen
+frame_7 : tokens 5,281 – 6,160  ✗ never seen
+frame_8 : tokens 6,161 – 7,040  ✗ never seen
+prompt  : tokens 7,041 – 7,056  ✗ never seen
+answer  : tokens 7,057 – 7,090  ✗ never seen  ← ground truth lost
 ```
 
 The most critical consequence is that **the ground truth answer is always cut off**. The trainer computes the loss on the assistant's response — if it never appears in the sequence, the model has nothing to learn from. It is essentially training on noise.
 
 So the real effect of `MAX_SEQ_LENGTH=2048` is not "only reads 1 frame" but rather:
-- Sees frame 1 fully
-- Sees ~82% of frame 2 (cut mid-patch)
-- Never sees frames 3–8
+- Sees frames 1–2 fully
+- Sees ~33% of frame 3 (cut mid-patch)
+- Never sees frames 4–8
 - Never sees the prompt
 - Never sees the answer it is supposed to predict
 
@@ -101,77 +103,77 @@ So the real effect of `MAX_SEQ_LENGTH=2048` is not "only reads 1 frame" but rath
 
 #### Change 1: Introduce MAX_PIXELS to control image resize
 
-`MAX_PIXELS` sets a ceiling on how many pixels an image can have before the processor resizes it down. If an image exceeds this limit, the processor scales it down proportionally (preserving aspect ratio) and then snaps each dimension to the nearest multiple of 28.
+`MAX_PIXELS` sets a ceiling on how many pixels an image can have before the processor resizes it down. If an image exceeds this limit, the processor scales it down proportionally (preserving aspect ratio) and then snaps each dimension to the nearest multiple of 32 (Qwen3-VL's patch size).
 
 ```python
-MAX_PIXELS = 512 * 28 * 28  # = 401,408 pixels
+MAX_PIXELS = 512 * 32 * 32  # = 524,288 pixels
 ```
 
-The number `512` represents the maximum number of 28×28 patches (tokens) allowed per frame.
+The number `512` represents the maximum number of 32×32 patches (tokens) allowed per frame.
 
 #### How the resize calculation works
 
-Given MAX_PIXELS = 401,408 and input frame 1280×720 = 921,600 pixels:
+Given MAX_PIXELS = 524,288 and input frame 1280×720 = 921,600 pixels:
 
 **Step 1: Compute scale factor**
 ```
 scale = sqrt(MAX_PIXELS / input_pixels)
-      = sqrt(401,408 / 921,600)
-      = sqrt(0.4355)
-      = 0.6599
+      = sqrt(524,288 / 921,600)
+      = sqrt(0.5690)
+      = 0.7543
 ```
 `sqrt` is used because both width and height are scaled by the same factor, so total pixels scale by `factor²`. To hit a target pixel count, solve for the factor.
 
 **Step 2: Scale each dimension**
 ```
-new_width  = 1280 × 0.6599 = 844.7
-new_height = 720  × 0.6599 = 475.1
+new_width  = 1280 × 0.7543 = 965.5
+new_height = 720  × 0.7543 = 543.1
 ```
 
-**Step 3: Round down to nearest multiple of 28**
+**Step 3: Round down to nearest multiple of 32**
 ```
-new_width  = floor(844.7 / 28) × 28 = 30 × 28 = 840
-new_height = floor(475.1 / 28) × 28 = 16 × 28 = 448
+new_width  = floor(965.5 / 32) × 32 = 30 × 32 = 960
+new_height = floor(543.1 / 32) × 32 = 16 × 32 = 512
 ```
 
-**Result: 1280×720 → 840×448**
+**Result: 1280×720 → 960×512**
 
 **Step 4: Token count after resize**
 ```
-(840 / 28) × (448 / 28) = 30 × 16 = 480 tokens per frame
+(960 / 32) × (512 / 32) = 30 × 16 = 480 tokens per frame
 8 frames × 480 = 3,840 visual tokens
 ```
 
-This is where `MAX_PIXELS = 512 × 28 × 28` comes from: we budget **at most 512 tokens per frame**, which after aspect-ratio rounding gives us 480 in practice.
+This is where `MAX_PIXELS = 512 × 32 × 32` comes from: we budget **at most 512 tokens per frame**, which after aspect-ratio rounding gives us 480 in practice.
 
-#### Change 2: Raise MAX_SEQ_LENGTH to 4096
+#### Change 2: Raise MAX_SEQ_LENGTH to 5120
 
 With `MAX_PIXELS` capping each frame to ~480 tokens, the full sample now needs:
 
 | Component | Tokens |
 |---|---|
-| 8 frames (840×448, after resize) | ~3,840 |
+| 8 frames (960×512, after resize) | ~3,840 |
 | Chat template overhead | ~30 |
 | Prompt text | ~15 |
 | Ground truth sentence | ~10–30 |
 | **Total needed** | **~3,895–3,915** |
 
-Setting `MAX_SEQ_LENGTH=4096` gives ~180 tokens of headroom — no truncation occurs.
+Setting `MAX_SEQ_LENGTH=5120` gives ~1,205 tokens of headroom — no truncation occurs.
 
 ```python
-MAX_SEQ_LENGTH = 4096
+MAX_SEQ_LENGTH = 5120
 ```
 
 ### Why Not Just Raise MAX_SEQ_LENGTH Without MAX_PIXELS?
 
-Without the pixel cap, 8 frames at 1280×720 need ~9,000 tokens. To fit that:
-- `MAX_SEQ_LENGTH` would need to be at least 9,200
-- Processing 9,200 tokens per step requires significantly more VRAM (KV cache grows with sequence length)
+Without the pixel cap, 8 frames at 1280×720 need ~7,040 tokens. To fit that:
+- `MAX_SEQ_LENGTH` would need to be at least 7,200
+- Processing 7,200 tokens per step requires significantly more VRAM (KV cache grows with sequence length)
 - On an RTX 2060 with ~6GB VRAM, this would cause an out-of-memory (OOM) error
 
 The two changes work together:
-- `MAX_PIXELS` reduces visual tokens per frame (3,840 instead of 9,000)
-- `MAX_SEQ_LENGTH=4096` provides enough room for the reduced token count
+- `MAX_PIXELS` reduces visual tokens per frame (3,840 instead of 7,040)
+- `MAX_SEQ_LENGTH=5120` provides enough room for the reduced token count with ample headroom
 
 ### Why Not Resize Frames During Preprocessing?
 
@@ -182,7 +184,7 @@ Resizing could happen at two points:
 Approach 2 was chosen because:
 - Raw 1280×720 frames are preserved on disk permanently
 - `MAX_PIXELS` can be changed without re-running preprocessing (which requires the original videos)
-- If you want to experiment with more tokens per frame (e.g. `MAX_PIXELS = 768×28×28`), just change one constant — no re-extraction needed
+- If you want to experiment with more tokens per frame (e.g. `MAX_PIXELS = 768×32×32`), just change one constant — no re-extraction needed
 - Preprocessing should be model-agnostic; resolution decisions belong to the model pipeline
 
 ### Processor pixel cap — transformers 5.x compatibility
@@ -202,7 +204,7 @@ The correct approach — direct dict mutation after loading:
 
 ```python
 tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
-tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
+tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
 ```
 
 ---
@@ -431,8 +433,8 @@ Why both `finetune_vision_layers=True` and `finetune_language_layers=True`: ASL 
 
 | What | Before | After | Why |
 |---|---|---|---|
-| `MAX_SEQ_LENGTH` | `2048` | `4096` | 2048 truncated all but ~1.8 frames |
-| `MAX_PIXELS` | not set | `512 × 28 × 28 = 401,408` | Without cap: 9,000 tokens/sample → OOM on RTX 2060 |
+| `MAX_SEQ_LENGTH` | `2048` | `5120` | 2048 truncated all but ~2.3 frames; 5120 fits 8 capped frames with 1,205 tokens headroom |
+| `MAX_PIXELS` | not set | `512 × 32 × 32 = 524,288` | Qwen3-VL uses 32×32 patches; without cap: 7,040 tokens/sample → OOM on RTX 2060 |
 | Processor pixel cap | not applied | `size["longest_edge"] = MAX_PIXELS` | transformers 5.x has no property setter; dict mutation is the only working API |
 | Training length control | `max_steps=15000` hardcoded | `--epochs N` → auto-computed from manifest | Hardcoded steps are wrong for datasets other than 30k samples |
 | Validation / early stopping | not supported | `--val-manifest` → `EarlyStoppingCallback(patience=3)` | Prevents overfitting; restores best checkpoint automatically |
@@ -441,9 +443,9 @@ Why both `finetune_vision_layers=True` and `finetune_language_layers=True`: ASL 
 ### Final token budget
 
 ```
-8 frames × 480 tokens/frame = 3,840 visual tokens
+8 frames × 480 tokens/frame = 3,840 visual tokens  (1280×720 → 960×512 with 32×32 patches)
 + ~30  chat template
 + ~15  prompt
 + ~30  answer (worst case)
-= ~3,915 total  <  MAX_SEQ_LENGTH=4096  ✓  (181 tokens headroom)
+= ~3,915 total  <  MAX_SEQ_LENGTH=5120  ✓  (1,205 tokens headroom)
 ```
