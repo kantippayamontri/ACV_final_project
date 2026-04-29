@@ -43,8 +43,10 @@ def run_inference(
         load_in_4bit=True,
     )
     # Apply same pixel cap as training to ensure consistent tokenization.
-    tokenizer.image_processor.max_pixels = MAX_PIXELS
-    tokenizer.image_processor.min_pixels = 4 * 28 * 28
+    # Qwen3-VL uses 32×32 patches. Direct property assignment raises AttributeError
+    # in transformers 5.x (no setter); dict mutation is the only working approach.
+    tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
+    tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
     FastVisionModel.for_inference(model)
 
     # 2. Load manifest
