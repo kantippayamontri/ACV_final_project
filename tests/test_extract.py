@@ -4,11 +4,17 @@ Uses mocking to avoid slow video I/O operations.
 """
 import csv
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+
+try:
+    import cv2  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules["cv2"] = MagicMock()
 
 from preprocess.extract import extract_frames, build_manifest
 
@@ -105,3 +111,13 @@ def test_build_manifest_jsonl_format(tmp_path):
     record = json.loads(manifest_path.read_text().splitlines()[0])
     assert set(record.keys()) == {"clip_name", "sentence", "frame_paths"}
     assert all(Path(p).name.endswith(".jpg") for p in record["frame_paths"])
+
+
+def test_build_manifest_rejects_invalid_worker_count(tmp_path):
+    tsv_path = tmp_path / "val.csv"
+    videos_dir = tmp_path / "raw_videos"
+    videos_dir.mkdir()
+    make_fake_tsv(tsv_path, [])
+
+    with pytest.raises(ValueError, match="workers must be at least 1"):
+        build_manifest(tsv_path, videos_dir, tmp_path / "processed", workers=0)
