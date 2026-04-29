@@ -90,10 +90,8 @@ MANIFEST_PATH = Path("datasets/processed/manifest.jsonl")
 OUTPUT_DIR = "asl_lora_output"
 MODEL_NAME = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
 PROMPT = "Translate this American Sign Language video into English text."
-MAX_SEQ_LENGTH = 5120  # 8 frames × ~480 tokens/frame (capped with 32×32 patches) + text overhead fits in 5120
-MAX_PIXELS = (
-    512 * 32 * 32
-)  # cap per-frame to 480 tokens (30×16 grid); 8 frames = 3,840 visual tokens
+MAX_SEQ_LENGTH = 5120 * 2  # 8 frames × ~270 tokens/frame (capped) + text overhead fits in 4096
+MAX_PIXELS = 512 * 32 * 32  # cap per-frame to ~270 tokens; 8 frames ≈ 2160 visual tokens
 
 
 def _record_to_sample(record: dict) -> dict:
