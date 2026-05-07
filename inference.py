@@ -10,7 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from train import MANIFEST_PATH, MODEL_NAME, MAX_SEQ_LENGTH, MAX_PIXELS, PROMPT
+from train import (
+    MANIFEST_PATH, MODEL_NAME, PROMPT, MAX_PIXELS, PATCH_SIZE,
+    compute_max_seq_length,
+)
 
 
 def load_manifest(manifest_path: Path) -> list[dict]:
@@ -35,25 +38,29 @@ def run_inference(
     from PIL import Image
     from unsloth import FastVisionModel
 
-    # 1. Load base model + LoRA adapters
+    # 1. Load manifest first to auto-detect frame count
+    records = load_manifest(Path(manifest_path))
+    if max_samples is not None:
+        records = records[:max_samples]
+    if not records:
+        print("No records in manifest.")
+        return
+    n_frames = len(records[0]["frame_paths"])
+    max_seq_length = compute_max_seq_length(n_frames)
+
     print(f"Loading model from {run_dir} ...")
+    print(f"Auto-detected {n_frames} frames → max_seq_length={max_seq_length}")
     model, tokenizer = FastVisionModel.from_pretrained(
         model_name=run_dir,
-        max_seq_length=MAX_SEQ_LENGTH,
+        max_seq_length=max_seq_length,
         load_in_4bit=True,
     )
     # Apply same pixel cap as training to ensure consistent tokenization.
     # Must be done BEFORE for_inference in case it reconfigures the processor.
-    # Qwen3-VL uses 32×32 patches. Direct property assignment raises AttributeError
-    # in transformers 5.x (no setter); dict mutation is the only working approach.
     FastVisionModel.for_inference(model)
     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
-    tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
+    tokenizer.image_processor.size["shortest_edge"] = 4 * PATCH_SIZE * PATCH_SIZE
 
-    # 2. Load manifest
-    records = load_manifest(Path(manifest_path))
-    if max_samples is not None:
-        records = records[:max_samples]
     print(f"Running inference on {len(records)} samples ...\n")
 
     predictions: list[str] = []

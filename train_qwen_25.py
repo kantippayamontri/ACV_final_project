@@ -1,31 +1,31 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# train.py — ASL fine-tuning pipeline (Qwen3-VL-2B + Unsloth QLoRA)
+# train_qwen_25.py — ASL fine-tuning pipeline (Qwen2.5-VL-3B + Unsloth QLoRA)
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # USAGE
 # ─────
 #   Full run (2 epochs, steps auto-computed from manifest size):
-#     python train.py --manifest-path datasets/processed/manifest.jsonl
+#     python train_qwen_25.py --manifest-path datasets/processed/manifest.jsonl
 #
 #   Custom epoch count:
-#     python train.py --manifest-path ... --epochs 3
+#     python train_qwen_25.py --manifest-path ... --epochs 3
 #
 #   With validation set (enables early stopping):
-#     python train.py --manifest-path datasets/processed/train.jsonl \
-#                     --val-manifest  datasets/processed/val.jsonl   \
-#                     --epochs 2
+#     python train_qwen_25.py --manifest-path datasets/processed/train.jsonl \
+#                             --val-manifest  datasets/processed/val.jsonl   \
+#                             --epochs 2
 #
 #   Quick test (override computed steps, e.g. 300 steps only):
-#     python train.py --manifest-path ... --max-steps 300 --output-dir my_output/
+#     python train_qwen_25.py --manifest-path ... --max-steps 300 --output-dir my_output/
 #
 #   Resume from a checkpoint (continues training from saved state):
-#     python train.py --resume asl_lora_output/checkpoint-870
+#     python train_qwen_25.py --resume asl_lora_output/checkpoint-870
 #
 #   Resume with custom output directory:
-#     python train.py --resume checkpoint-870 --output-dir my_resumed_run/
+#     python train_qwen_25.py --resume checkpoint-870 --output-dir my_resumed_run/
 #
 #   Resume and extend training steps:
-#     python train.py --resume asl_lora_output/checkpoint-870 --max-steps 2000
+#     python train_qwen_25.py --resume asl_lora_output/checkpoint-870 --max-steps 2000
 #
 # STEP CALCULATION
 # ────────────────
@@ -48,16 +48,16 @@
 #   Instead, load_best_model_at_end=True ensures the best checkpoint
 #   (by eval_loss) is restored at the end of training.
 #
-# TOKEN BUDGET (MAX_PIXELS=1024×32×32, max_seq_length auto-computed from --frames)
+# TOKEN BUDGET (MAX_PIXELS=1200×28×28, max_seq_length auto-computed from --frames)
 # ───────────────────────────────────────────────────────────────────
-#   Qwen3-VL uses 32×32 pixel patches.
-#   Native 1280×720: ceil(1280/32)×ceil(720/32) = 40×23 = 920 tokens/frame
-#   n_frames × 920 + 75 text overhead × 1.3 margin → max_seq_length
+#   Qwen2.5-VL uses 28×28 pixel patches (vs Qwen3-VL's 32×32).
+#   Native 1280×720: ceil(1280/28)×ceil(720/28) = 46×26 = 1,196 tokens/frame
+#   n_frames × 1,196 + 75 text overhead × 1.3 margin → max_seq_length
 #
-#   MAX_PIXELS = 1024×32×32 = 1,048,576 > native 921,600 → no downscaling needed.
+#   MAX_PIXELS = 1200×28×28 = 940,800 > native 921,600 → no downscaling needed.
 #
 #   Compute manually:      compute_max_seq_length(n_frames)
-#   Or use --frames flag:   python train.py --frames 16 --epochs 3
+#   Or use --frames flag:   python train_qwen_25.py --frames 16 --epochs 3
 #
 #   ASL requires fine detail (handshapes, finger configurations, facial grammar)
 #   that are lost when downscaling. Full resolution preserves these.
@@ -70,10 +70,10 @@
 #   Passing as from_pretrained kwargs → TypeError (model __init__ rejects them).
 #   Correct approach: mutate the size dict directly after loading:
 #     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
-#     tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
+#     tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
 # ─────────────────────────────────────────────────────────────────────────────
 
-"""ASL fine-tuning pipeline using Unsloth FastVisionModel + QLoRA."""
+"""ASL fine-tuning pipeline using Unsloth FastModel + QLoRA (Qwen2.5-VL-3B)."""
 
 from __future__ import annotations
 
@@ -83,22 +83,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MANIFEST_PATH = Path("datasets/processed/manifest.jsonl")
-OUTPUT_DIR = "asl_lora_output"
-MODEL_NAME = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
+OUTPUT_DIR = "asl_lora_output_qwen25"
+MODEL_NAME = "unsloth/Qwen2.5-VL-3B-Instruct-bnb-4bit"
 PROMPT = "Translate this American Sign Language video into English text."
-PATCH_SIZE = 32  # Qwen3-VL uses 32×32 pixel patches
+PATCH_SIZE = 28  # Qwen2.5-VL uses 28×28 pixel patches
 DEFAULT_N_FRAMES = 8
 FRAME_W = 1280
 FRAME_H = 720
 TEXT_OVERHEAD = 75
 SEQ_LENGTH_MARGIN = 1.3  # 30% safety headroom above exact token count
-MAX_PIXELS = 1024 * 32 * 32  # 1,048,576 pixels — preserves native 1280×720 (921,600) without downscaling
+MAX_PIXELS = 1200 * 28 * 28  # 940,800 pixels — preserves native 1280×720 (921,600) without downscaling
 
 
 def compute_max_seq_length(n_frames: int) -> int:
     """Compute max_seq_length for a given frame count at native resolution.
 
-    Qwen3-VL uses 32×32 patches: 1280×720 → ceil(1280/32)×ceil(720/32) = 40×23 = 920 tokens/frame.
+    Qwen2.5-VL uses 28×28 patches: 1280×720 → ceil(1280/28)×ceil(720/28) = 46×26 = 1,196 tokens/frame.
     Result includes 30% margin for safety.
     """
     tokens_per_frame = math.ceil(FRAME_W / PATCH_SIZE) * math.ceil(FRAME_H / PATCH_SIZE)
@@ -137,7 +137,7 @@ def _count_manifest_samples(manifest_path: Path | str) -> int:
 
 
 def load_training_dataset(manifest_path: Path | str = MANIFEST_PATH) -> list[dict]:
-    """Load manifest.jsonl and return a list of ChatML samples with PIL Images.
+    """Load manifest.jsonl and return a list of ChatML samples.
 
     Returns a plain list (not HF Dataset) because PIL Images can't be
     serialized by PyArrow. SFTTrainer accepts plain lists directly.
@@ -160,7 +160,7 @@ def train(
     resume_from_checkpoint: str | None = None,
     n_frames: int = DEFAULT_N_FRAMES,
 ) -> None:
-    """Fine-tune Qwen3 VL-2B-Instruct on ASL frames with QLoRA.
+    """Fine-tune Qwen2.5-VL-3B-Instruct on ASL frames with QLoRA.
 
     max_steps is auto-computed from num_epochs and the manifest size when not
     explicitly provided.  Pass max_steps to override (e.g. for a quick test).
@@ -168,60 +168,42 @@ def train(
     is computed from it automatically.
     """
     import torch
-    from unsloth import (
-        FastVisionModel,
-    )  # allow to load and fine-tune VLLM using unsloth utilities
-    from unsloth.trainer import (
-        UnslothVisionDataCollator,
-    )  # use to prepare batches of VLLM data (image, text) for training, handling the format and batching required by the model during fine-tuning
-    from trl import (  # SFTTrainer = class for supervised fine-tuning (SFT), SFTConfig = use to config training parameters like batch size, steps, optimizers
-        SFTConfig,
-        SFTTrainer,
-    )
+    from unsloth import FastModel
+    from unsloth.trainer import UnslothVisionDataCollator
+    from trl import SFTConfig, SFTTrainer
 
     # 1. Load model
     max_seq_length = compute_max_seq_length(n_frames)
     print(f"Computed max_seq_length={max_seq_length} for {n_frames} frames "
           f"(patch={PATCH_SIZE}×{PATCH_SIZE}, native={FRAME_W}×{FRAME_H})")
-    model, tokenizer = FastVisionModel.from_pretrained(
+    model, tokenizer = FastModel.from_pretrained(
         model_name=MODEL_NAME,
         max_seq_length=max_seq_length,
         load_in_4bit=True,
     )
     # Cap image resolution so n_frames of 1280×720 stay within max_seq_length.
-    # Native 1280×720: 40×23 = 920 tokens/frame × n_frames + 75 text × 1.3 margin.
-    # Qwen3-VL uses 32×32 patches.
-    # The processor stores these as size["longest_edge"] / size["shortest_edge"].
-    # Setting via the property raises AttributeError in transformers 5.x (no setter);
-    # passing as from_pretrained kwargs fails because the model __init__ rejects them.
-    # Direct dict mutation is the only working approach.
+    # Native 1280×720: 46×26 = 1,196 tokens/frame × n_frames + 75 text × 1.3 margin.
+    # Qwen2.5-VL uses 28×28 patches.
     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
-    tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
-    # 4-bit: Uses the least memory (about 4× smaller than 16-bit), fastest, but may lose some accuracy. Enables training very large models on consumer GPUs. Used for QLoRA.
-    # 8-bit: Uses more memory than 4-bit but less than 16-bit. Good balance between efficiency and accuracy, with minimal quality loss.
-    # 16-bit (fp16/bf16): Standard for most training, highest accuracy, but uses the most memory and compute. Needed for full-precision tasks.
-    # In summary: Lower bits = less memory, faster, but potentially less accurate. 4-bit is most efficient, 16-bit is most precise.
+    tokenizer.image_processor.size["shortest_edge"] = 4 * 28 * 28
 
     # 2. Add LoRA adapters
-    model = FastVisionModel.get_peft_model(  # parameter-efficient fine-tuning(PEFT)
+    model = FastModel.get_peft_model(
         model,
-        finetune_vision_layers=True,  # enable LoRA adapters on vision encoder layers -> use for process images/frames -> learn ASL vision features
-        finetune_language_layers=True,  # enable LoRA adapters on language encoder layers -> use for process generate text -> learn ASL translations
-        finetune_attention_modules=True,  # enable LoRA adapters on attention module -> Q,K,V projections -> learn new attention pattern for ASL
-        finetune_mlp_modules=True,  # enable LoRA adapters on MLP(feed-forward) modules -> learn new transformations for ASL data.
-        r=16,  #
+        finetune_vision_layers=True,
+        finetune_language_layers=True,
+        finetune_attention_modules=True,
+        finetune_mlp_modules=True,
+        r=16,
         lora_alpha=16,
         lora_dropout=0,
         bias="none",
-        random_state=3407,  # random seed for reproducible
+        random_state=3407,
         use_rslora=False,
-        target_modules="all-linear",  # Apply LoRA adapters to all linear layers in the model, not just specific ones. Maximizes what the adapters can learn.
+        target_modules="all-linear",
     )
 
-    FastVisionModel.for_training(model)
-    # 1) Enables gradient checkpointing — saves memory by recomputing activations during the backward pass instead of storing them.
-    # 2) Sets the model to train mode — activates dropout, batch norm updates, etc.
-    # 3) Ensures LoRA adapters are trainable — makes sure only the LoRA parameters have gradients enabled, while the frozen base model weights stay untrainable.
+    FastModel.for_training(model)
 
     # 3. Load datasets
     train_dataset = load_training_dataset(manifest_path)
@@ -230,7 +212,7 @@ def train(
     )
 
     # Compute max_steps from epochs if not explicitly overridden.
-    EFFECTIVE_BATCH = 2 
+    EFFECTIVE_BATCH = 48
     num_samples = _count_manifest_samples(manifest_path)
     steps_per_epoch = math.ceil(num_samples / EFFECTIVE_BATCH)
     computed_steps = steps_per_epoch * num_epochs
@@ -244,7 +226,6 @@ def train(
     # 4. Train
 
     # Eval args are only added when a val set is provided.
-    # load_best_model_at_end requires save_strategy == eval_strategy.
     eval_args = (
         dict(
             eval_strategy="steps",
@@ -266,7 +247,7 @@ def train(
         model=model,
         tokenizer=tokenizer,
         train_dataset=train_dataset,
-        eval_dataset=val_dataset,  # None when no val set → SFTTrainer ignores it
+        eval_dataset=val_dataset,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         args=SFTConfig(
             per_device_train_batch_size=EFFECTIVE_BATCH,
@@ -283,7 +264,6 @@ def train(
             seed=3407,
             output_dir=output_dir,
             report_to="tensorboard",
-            # Required for vision fine-tuning:
             remove_unused_columns=False,
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
@@ -300,11 +280,11 @@ def train(
 
 
 def cli() -> None:
-    """CLI entry point for train.py — parses args and calls train()."""
+    """CLI entry point for train_qwen_25.py — parses args and calls train()."""
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Fine-tune Qwen3-VL on ASL frames with QLoRA"
+        description="Fine-tune Qwen2.5-VL-3B on ASL frames with QLoRA"
     )
     parser.add_argument(
         "--manifest-path",
@@ -366,7 +346,6 @@ def _make_run_dir(num_epochs: int, max_steps: int | None) -> str:
     suffix = f"steps{max_steps}" if max_steps is not None else f"ep{num_epochs}"
     project_root = Path(__file__).parent
     return str(project_root / "runs" / f"run_{ts}_{suffix}")
-    # return str(project_root)
 
 
 if __name__ == "__main__":

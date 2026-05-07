@@ -25,6 +25,7 @@ def test_train_cli_passes_args_to_train(tmp_path):
             max_steps=10,
             output_dir=str(tmp_path / "out"),
             resume_from_checkpoint=None,
+            n_frames=8,
         )
 
 
@@ -174,3 +175,30 @@ def test_train_cli_resume_with_custom_output_dir(tmp_path):
         assert call_kwargs["resume_from_checkpoint"] == "some/other/checkpoint-123"
         assert call_kwargs["output_dir"] == str(tmp_path / "custom_resumed")
         assert call_kwargs["max_steps"] == 20
+
+
+def test_train_cli_frames_arg(tmp_path):
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text("")
+
+    with patch("train.train") as mock_train:
+        argv = [
+            "train.py",
+            "--manifest-path", str(manifest),
+            "--max-steps", "10",
+            "--output-dir", str(tmp_path / "out"),
+            "--frames", "16",
+        ]
+        with patch.object(sys, "argv", argv):
+            from train import cli
+            cli()
+
+        mock_train.assert_called_once_with(
+            manifest_path=manifest,
+            val_manifest_path=None,
+            num_epochs=2,
+            max_steps=10,
+            output_dir=str(tmp_path / "out"),
+            resume_from_checkpoint=None,
+            n_frames=16,
+        )
