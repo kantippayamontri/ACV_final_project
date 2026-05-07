@@ -78,4 +78,7 @@ def test_load_manifest_dataset_applies_format(tmp_path):
     ds = load_manifest_dataset(manifest)
     sample = ds[0]
     assert "messages" in sample
-    assert sample["messages"][1]["content"] == "goodbye"
+    messages = json.loads(sample["messages"])
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"] == "goodbye"

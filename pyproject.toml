@@ -1,7 +1,7 @@
 [project]
 name = "acv-final-project"
 version = "0.1.0"
-description = "ASL video-to-text translation using Qwen2.5-VL-2B with Unsloth + QLoRA"
+description = "ASL video-to-text translation using Qwen3-VL-2B with Unsloth + QLoRA"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -22,7 +22,7 @@ dependencies = [
     "pillow>=11.0.0",
     "sacrebleu>=2.6.0",
     "torchaudio>=2.11.0",
-    "xformers>=0.0.29"
+    "xformers>=0.0.29",
     "tensorboard>=2.20.0",
 ]
 

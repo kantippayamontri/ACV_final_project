@@ -75,7 +75,7 @@ def test_max_seq_length_fits_8_frames():
 
 def test_max_pixels_constant_defined():
     from train import MAX_PIXELS
-    expected = 512 * 32 * 32
+    expected = 1024 * 32 * 32
     assert MAX_PIXELS == expected, (
-        f"MAX_PIXELS should be 512*32*32={expected}, got {MAX_PIXELS}"
+        f"MAX_PIXELS should be 1024*32*32={expected}, got {MAX_PIXELS}"
     )

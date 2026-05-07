@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--n-frames", type=int, default=8,
                         help="Frames to extract per clip (default: 8)")
     parser.add_argument("--train", action="store_true",
-                        help="Fine-tune Qwen2.5-VL-2B-Instruct on preprocessed data")
+                        help="Fine-tune Qwen3-VL-2B-Instruct on preprocessed data")
     parser.add_argument("--max-steps", type=int, default=60,
                         help="Training steps (default: 60)")
     args = parser.parse_args()

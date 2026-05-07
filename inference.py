@@ -43,11 +43,12 @@ def run_inference(
         load_in_4bit=True,
     )
     # Apply same pixel cap as training to ensure consistent tokenization.
+    # Must be done BEFORE for_inference in case it reconfigures the processor.
     # Qwen3-VL uses 32×32 patches. Direct property assignment raises AttributeError
     # in transformers 5.x (no setter); dict mutation is the only working approach.
+    FastVisionModel.for_inference(model)
     tokenizer.image_processor.size["longest_edge"] = MAX_PIXELS
     tokenizer.image_processor.size["shortest_edge"] = 4 * 32 * 32
-    FastVisionModel.for_inference(model)
 
     # 2. Load manifest
     records = load_manifest(Path(manifest_path))
@@ -64,8 +65,8 @@ def run_inference(
         # Load frames as PIL Images
         images = [Image.open(fp).convert("RGB") for fp in record["frame_paths"]]
 
-        # Build messages in ChatML format (no assistant turn — we want the model to generate it)
-        user_content = [{"type": "image"} for _ in images]
+        # Build messages in ChatML format matching training (image paths as strings)
+        user_content = [{"type": "image", "image": fp} for fp in record["frame_paths"]]
         user_content.append({"type": "text", "text": PROMPT})
         messages = [{"role": "user", "content": user_content}]
 

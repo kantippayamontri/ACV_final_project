@@ -31,4 +31,5 @@ def load_manifest_dataset(manifest_path: Path) -> Dataset:
             if line:
                 records.append(json.loads(line))
     formatted = [format_sample(r) for r in records]
-    return Dataset.from_list(formatted, on_mixed_types="use_json")
+    flat = [{"messages": json.dumps(s["messages"])} for s in formatted]
+    return Dataset.from_list(flat)

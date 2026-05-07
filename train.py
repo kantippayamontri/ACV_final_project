@@ -29,8 +29,8 @@
 #
 # STEP CALCULATION
 # ────────────────
-#   effective_batch_size = per_device_batch_size(1) × gradient_accumulation(4) = 4
-#   steps_per_epoch      = ceil(num_samples / 4)
+#   effective_batch_size = per_device_batch_size(EFFECTIVE_BATCH) × gradient_accumulation(1) = EFFECTIVE_BATCH
+#   steps_per_epoch      = ceil(num_samples / EFFECTIVE_BATCH)
 #   max_steps            = steps_per_epoch × num_epochs
 #
 #   Example: 30,000 samples → 7,500 steps/epoch × 2 epochs = 15,000 steps
@@ -48,23 +48,17 @@
 #   Instead, load_best_model_at_end=True ensures the best checkpoint
 #   (by eval_loss) is restored at the end of training.
 #
-# TOKEN BUDGET (why MAX_SEQ_LENGTH=5120 and MAX_PIXELS=512×32×32)
+# TOKEN BUDGET (why MAX_SEQ_LENGTH=10240 and MAX_PIXELS=1024×32×32)
 # ────────────────────────────────────────────────────────────────
 #   Qwen3-VL uses 32×32 pixel patches (upgraded from Qwen2-VL's 28×28).
-#   Without MAX_PIXELS cap: 1280×720 → (1280/32)×(720/32) = 40×22 = 880 tokens/frame
-#   × 8 frames = 7,040 tokens — far exceeds any reasonable seq length and causes OOM.
+#   Native 1280×720: (1280/32)×(720/32) = 40×22.5 → ceil → 40×23 = 920 tokens/frame
+#   8 frames × 920 = 7,360 visual tokens + ~75 text overhead = ~7,435 total
 #
-#   With MAX_PIXELS = 512×32×32 = 524,288: processor resizes 1280×720 → 960×512
-#   → (960/32)×(512/32) = 30×16 = 480 tokens/frame × 8 frames = 3,840 visual tokens.
+#   MAX_PIXELS = 1024×32×32 = 1,048,576 > native 921,600 → no downscaling needed.
+#   MAX_SEQ_LENGTH = 10,240 gives 2,805 tokens of headroom (ample).
 #
-#   Full sample budget:
-#     3,840  visual tokens (8 frames)
-#   +    30  chat template overhead
-#   +    15  prompt text
-#   +    30  ground-truth answer (worst case)
-#   = ~3,915  total  <  MAX_SEQ_LENGTH=5120  ✓ (1,205 tokens headroom)
-#
-#   See TRAIN_CONCEPT_SUMMARY.md for full derivation.
+#   ASL requires fine detail (handshapes, finger configurations, facial grammar)
+#   that are lost when downscaling to ~965×543. Full resolution preserves these.
 #
 # PROCESSOR PIXEL CAP — transformers 5.x compatibility note
 # ──────────────────────────────────────────────────────────
@@ -90,8 +84,8 @@ MANIFEST_PATH = Path("datasets/processed/manifest.jsonl")
 OUTPUT_DIR = "asl_lora_output"
 MODEL_NAME = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
 PROMPT = "Translate this American Sign Language video into English text."
-MAX_SEQ_LENGTH = 5120 * 2  # 8 frames × ~270 tokens/frame (capped) + text overhead fits in 4096
-MAX_PIXELS = 512 * 32 * 32  # cap per-frame to ~270 tokens; 8 frames ≈ 2160 visual tokens
+MAX_SEQ_LENGTH = 5120 * 2  # 10240 — fits 8 frames at native 1280×720 (~920 tokens/frame)
+MAX_PIXELS = 1024 * 32 * 32  # 1,048,576 pixels — preserves native 1280×720 (921,600) without downscaling
 
 
 def _record_to_sample(record: dict) -> dict:
@@ -167,7 +161,7 @@ def train(
         load_in_4bit=True,
     )
     # Cap image resolution so 8 frames of 1280×720 stay within MAX_SEQ_LENGTH.
-    # Without this, 1280×720 → 40×22 = 880 tokens/frame × 8 = 7,040 tokens >> 5120.
+    # Native 1280×720: 40×23 = 920 tokens/frame × 8 = 7,360 + 75 text = ~7,435 < 10,240.
     # Qwen3-VL uses 32×32 patches (unlike Qwen2-VL which used 28×28).
     # The processor stores these as size["longest_edge"] / size["shortest_edge"].
     # Setting via the property raises AttributeError in transformers 5.x (no setter);
@@ -208,7 +202,6 @@ def train(
     )
 
     # Compute max_steps from epochs if not explicitly overridden.
-    # effective batch size = per_device_batch(1) × grad_accum(4) = 4
     EFFECTIVE_BATCH = 48 
     num_samples = _count_manifest_samples(manifest_path)
     steps_per_epoch = math.ceil(num_samples / EFFECTIVE_BATCH)
@@ -283,7 +276,7 @@ def cli() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Fine-tune Qwen2.5-VL on ASL frames with QLoRA"
+        description="Fine-tune Qwen3-VL on ASL frames with QLoRA"
     )
     parser.add_argument(
         "--manifest-path",

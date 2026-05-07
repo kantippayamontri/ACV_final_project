@@ -60,6 +60,7 @@ dependencies = [
     { name = "trl" },
     { name = "unsloth" },
     { name = "unsloth-zoo" },
+    { name = "xformers" },
 ]
 
 [package.dev-dependencies]
@@ -87,6 +88,7 @@ requires-dist = [
     { name = "trl", specifier = ">=0.18.2,<=0.24.0" },
     { name = "unsloth", specifier = ">=2025.7.2" },
     { name = "unsloth-zoo", specifier = ">=2026.4" },
+    { name = "xformers", specifier = ">=0.0.29" },
 ]
 
 [package.metadata.requires-dev]
